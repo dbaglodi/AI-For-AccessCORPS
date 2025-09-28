@@ -1,0 +1,10 @@
+# Web framework dependencies
+fastapi>=0.104.0,<1.0
+uvicorn[standard]>=0.24.0,<1.0
+python-multipart>=0.0.6,<1.0
+python-dotenv>=1.0.0,<2.0
+aiofiles>=23.2.0,<24.0
+
+# Document processing (if not in requirements2.txt)
+python-docx>=1.1.0,<2.0
+python-pptx>=0.6.22,<1.0

@@ -1,0 +1,25 @@
+{
+  "sync_date": "2025-09-21T18:42:51.561956",
+  "platform": "Windows",
+  "files_found": {
+    "src/main.py": 13644,
+    "src/pipelines/agent_pipeline.py": 30141,
+    "src/models/vision_processor.py": 9034,
+    "src/models/llm_config.py": 2845,
+    "requirements/requirements.txt": 445,
+    "requirements/requirements2.txt": 884
+  },
+  "files_missing": [
+    "main.py",
+    "agent_pipeline.py",
+    "vision_processor.py",
+    "llm_config.py",
+    "requirements.txt",
+    "requirements2.txt"
+  ],
+  "instructions": [
+    "Copy all files to Linux",
+    "Run: python sync_and_fix.py",
+    "Run: python run.py"
+  ]
+}

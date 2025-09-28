@@ -1,0 +1,40 @@
+# Environment and config
+.env
+.env.*
+*.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+
+# Data directories
+data/uploads/*
+data/processed/*
+data/cache/*
+!data/uploads/.gitkeep
+!data/processed/.gitkeep
+!data/cache/.gitkeep
+
+# Model downloads
+models/
+.cache/
+huggingface_hub/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backup
+backup/

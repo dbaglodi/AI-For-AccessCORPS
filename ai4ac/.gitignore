@@ -1,0 +1,6 @@
+# Project root ignores
+.env
+# Optionally ignore per-service node_modules / venvs if not already covered by subfolders
+node_modules/
+venv/
+.venv/

@@ -1,0 +1,322 @@
+<div class="container">
+  <h1>Document Remediation</h1>
+
+  <!-- Upload Section -->
+  <div class="upload-section">
+    <input type="file" (change)="onFileSelected($event)" accept=".docx,.pptx" />
+    <button (click)="uploadFile()" [disabled]="!selectedFile">Upload</button>
+  </div>
+
+  <!-- Error Display -->
+  <div *ngIf="error" class="error-message">{{ error }}</div>
+
+  <!-- Progress Section -->
+  <div class="status-container" *ngIf="uploadProgress > 0 || processing">
+    <!-- Upload Progress -->
+    <div class="status-step" [class.active]="uploadProgress < 100">
+      <span class="step-number">1</span>
+      <span class="step-label">Uploading</span>
+      <div class="progress-bar">
+        <div class="progress" [style.width.%]="uploadProgress"></div>
+      </div>
+      <span class="progress-text">{{ uploadProgress }}%</span>
+    </div>
+
+    <!-- Processing Progress -->
+    <div class="status-step" [class.active]="processing" *ngIf="processingStatus">
+      <span class="step-number">2</span>
+      <span class="step-label">Processing</span>
+      <div class="progress-bar">
+        <div class="progress" [style.width.%]="processingStatus?.progress || 0"></div>
+      </div>
+      <div class="status-details">
+        <p>{{ processingStatus?.current_step }}</p>
+        <p *ngIf="processingStatus?.total_images">
+          Processing image {{ processingStatus?.processed_images }} of {{ processingStatus?.total_images }}
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Results Section -->
+  <div *ngIf="images.length" class="results-container">
+    <h2>Review Images & Alt Text</h2>
+
+    <!-- Carousel / slider controls -->
+    <div class="carousel-controls">
+      <button type="button" class="secondary" (click)="prev()" [disabled]="activeIndex <= 0">◀</button>
+      <input type="range" min="0" [max]="images.length - 1" [(ngModel)]="activeIndex"
+        (change)="setActive(activeIndex)" />
+      <button type="button" class="secondary" (click)="next()" [disabled]="activeIndex >= images.length - 1">▶</button>
+    </div>
+
+    <!-- Cards viewport -->
+    <div class="cards-viewport">
+      <div class="cards" role="list" [style.width.px]="images.length * 400">
+        <div *ngFor="let img of images; let i = index" role="listitem" class="card-wrapper"
+          [class.active]="i === activeIndex" id="image-card-{{i}}">
+          <div class="image-card" [class.active]="i === activeIndex" id="image-card-{{i}}">
+            <div class="image-header">
+              <strong>Image {{ i + 1 }}</strong>
+              <span class="image-location" *ngIf="img.slide_num">Slide {{ img.slide_num }}</span>
+            </div>
+
+            <div class="image-preview">
+              <img [src]="img.image_data" [alt]="img.alt_text || 'Image preview'" />
+            </div>
+
+            <div class="meta-row">
+              <div class="old-alt"><label>Old alt:</label>
+                <div class="old-alt-text">{{ img.alt_text || '—' }}</div>
+              </div>
+              <div class="tags-container" *ngIf="img.tags?.length">
+                <span class="tag" *ngFor="let tag of img.tags">{{ tag }}</span>
+              </div>
+            </div>
+
+            <div class="alt-text-section">
+              <label [for]="'alt-text-' + i">New Alt Text (editable)</label>
+              <textarea [id]="'alt-text-' + i" class="alt-text-input" [(ngModel)]="img.userAltText"
+                [name]="'altText' + i" rows="3" placeholder="Enter alt text description">
+              </textarea>
+              <div class="alt-text-actions">
+                <button type="button" class="secondary" (click)="acceptSuggestedAltText(i)">
+                  Revert to Generated
+                </button>
+                <button type="button" class="secondary" (click)="clearAltText(i)">
+                  Clear
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <form (ngSubmit)="updateAltText()">
+      <div class="action-buttons">
+        <button type="submit" class="primary" [disabled]="updating">
+          {{ updating ? 'Saving...' : 'Save All Alt Texts' }}
+        </button>
+        <button type="button" class="secondary" (click)="downloadFile()" [disabled]="updating">
+          Download Document
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<style>
+  :host {
+    --primary-color: #0066cc;
+    --secondary-color: #666666;
+    --success-color: #28a745;
+    --danger-color: #dc3545;
+    --border-color: #dee2e6;
+    --background-light: #f8f9fa;
+    --text-color: #212529;
+    --text-muted: #6c757d;
+  }
+
+  .container {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 2rem;
+  }
+
+  h1 {
+    margin-bottom: 2rem;
+    color: var(--text-color);
+  }
+
+  .upload-section {
+    margin-bottom: 2rem;
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+  }
+
+  .error-message {
+    color: var(--danger-color);
+    padding: 0.75rem;
+    margin: 1rem 0;
+    border: 1px solid var(--danger-color);
+    border-radius: 4px;
+    background-color: rgba(220, 53, 69, 0.1);
+  }
+
+  .status-container {
+    margin: 2rem 0;
+  }
+
+  .status-step {
+    margin-bottom: 1.5rem;
+    padding: 1rem;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--background-light);
+  }
+
+  .step-number {
+    display: inline-block;
+    width: 24px;
+    height: 24px;
+    line-height: 24px;
+    text-align: center;
+    background: var(--primary-color);
+    color: white;
+    border-radius: 50%;
+    margin-right: 0.5rem;
+  }
+
+  .step-label {
+    font-weight: bold;
+    color: var(--text-color);
+  }
+
+  .progress-bar {
+    margin: 1rem 0;
+    background: var(--border-color);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .progress {
+    height: 8px;
+    background: var(--primary-color);
+    transition: width 0.3s ease;
+  }
+
+  .status-details {
+    margin-top: 0.5rem;
+    color: var(--text-muted);
+  }
+
+  .results-container {
+    margin-top: 2rem;
+  }
+
+  .image-review {
+    margin-bottom: 2rem;
+    padding: 1.5rem;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: white;
+  }
+
+  .image-header {
+    margin-bottom: 1rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .image-location {
+    color: var(--text-muted);
+    font-size: 0.875rem;
+  }
+
+  .image-container {
+    margin: 1rem 0;
+    text-align: center;
+  }
+
+  .image-container img {
+    max-width: 100%;
+    max-height: 400px;
+    object-fit: contain;
+  }
+
+  .tags-container {
+    margin: 1rem 0;
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .tag {
+    padding: 0.25rem 0.75rem;
+    background: var(--background-light);
+    border-radius: 16px;
+    font-size: 0.875rem;
+    color: var(--text-muted);
+  }
+
+  .alt-text-section {
+    margin-top: 1rem;
+  }
+
+  .alt-text-input {
+    width: 100%;
+    margin: 0.5rem 0;
+    padding: 0.5rem;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    resize: vertical;
+  }
+
+  .alt-text-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+  }
+
+  .action-buttons {
+    margin-top: 2rem;
+    display: flex;
+    gap: 1rem;
+    justify-content: flex-end;
+  }
+
+  button {
+    padding: 0.5rem 1rem;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: background-color 0.2s, opacity 0.2s;
+  }
+
+  button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  button.primary {
+    background: var(--primary-color);
+    color: white;
+  }
+
+  button.primary:hover:not(:disabled) {
+    background: #0056b3;
+  }
+
+  button.secondary {
+    background: var(--background-light);
+    color: var(--text-color);
+    border: 1px solid var(--border-color);
+  }
+
+  button.secondary:hover:not(:disabled) {
+    background: #e9ecef;
+  }
+
+  @media (max-width: 600px) {
+    .container {
+      padding: 1rem;
+    }
+
+    .upload-section {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .action-buttons {
+      flex-direction: column;
+    }
+
+    .alt-text-actions {
+      flex-direction: column;
+    }
+  }
+</style>

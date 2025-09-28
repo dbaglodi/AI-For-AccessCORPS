@@ -1,0 +1,309 @@
+// Variables
+$primary-color: #0066cc;
+$secondary-color: #666666;
+$success-color: #28a745;
+$danger-color: #dc3545;
+$light-bg: #f8f9fa;
+$dark-text: #212529;
+$text-muted: #6c757d;
+$border-color: #dee2e6;
+$background-light: #f8f9fa;
+
+// Button variables
+$button-bg: $primary-color;
+$button-fg: white;
+$button-hover: darken($primary-color, 10%);
+$button-secondary-bg: $background-light;
+$button-secondary-fg: $dark-text;
+$button-secondary-hover: darken($background-light, 5%);
+
+// Input variables
+$input-bg: white;
+$input-fg: $dark-text;
+$input-border: $border-color;
+$input-focus: lighten($primary-color, 35%);
+
+// Base styles
+.container {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 2rem;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  color: $dark-text;
+}
+
+h1,
+h2 {
+  color: $dark-text;
+  margin-bottom: 1.5rem;
+}
+
+// Form controls
+.upload-section {
+  margin-bottom: 2rem;
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+
+  @media (max-width: 600px) {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+input[type="file"] {
+  padding: 0.5rem;
+  border: 1px solid $border-color;
+  border-radius: 4px;
+  width: 100%;
+  max-width: 400px;
+}
+
+button {
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s, opacity 0.2s;
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  &.primary {
+    background: $button-bg;
+    color: $button-fg;
+    border: none;
+
+    &:hover:not(:disabled) {
+      background: $button-hover;
+    }
+  }
+
+  &.secondary {
+    background: $button-secondary-bg;
+    color: $button-secondary-fg;
+    border: 1px solid $border-color;
+
+    &:hover:not(:disabled) {
+      background: $button-secondary-hover;
+    }
+  }
+}
+
+.error-message {
+  color: $danger-color;
+  padding: 0.75rem;
+  margin: 1rem 0;
+  border: 1px solid $danger-color;
+  border-radius: 4px;
+  background-color: rgba($danger-color, 0.1);
+}
+
+.status-container {
+  margin: 2rem 0;
+}
+
+.status-step {
+  margin-bottom: 1.5rem;
+  padding: 1rem;
+  border: 1px solid $border-color;
+  border-radius: 4px;
+  background: $background-light;
+
+  &.active {
+    border-color: $primary-color;
+  }
+}
+
+.progress-bar {
+  margin: 1rem 0;
+  background: $border-color;
+  border-radius: 4px;
+  overflow: hidden;
+  height: 8px;
+}
+
+.progress {
+  height: 100%;
+  background: $primary-color;
+  transition: width 0.3s ease;
+}
+
+.status-details {
+  margin-top: 0.5rem;
+  color: $text-muted;
+}
+
+.image-review {
+  margin-bottom: 2rem;
+  padding: 1.5rem;
+  border: 1px solid $border-color;
+  border-radius: 4px;
+  background: white;
+}
+
+/* Carousel / cards */
+.carousel-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+
+  input[type="range"] {
+    flex: 1 1 auto;
+  }
+}
+
+.cards-viewport {
+  overflow-x: auto;
+  overflow-y: hidden;
+  white-space: nowrap;
+  padding: 1rem 0;
+}
+
+.cards {
+  display: flex;
+  gap: 1rem;
+  min-width: 100%;
+}
+
+.card-wrapper {
+  flex: 0 0 400px;
+  white-space: normal;
+}
+
+.image-card {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 1rem;
+  background: white;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  transition: all 0.3s ease;
+
+  &.active {
+    border-color: var(--primary-color);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    transform: scale(1.02);
+  }
+}
+
+.image-card.active {
+  transform: scale(1.04);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+.image-preview {
+  text-align: center;
+  margin: 0.75rem 0;
+
+  img {
+    max-width: 100%;
+    max-height: 360px;
+    object-fit: contain;
+    border-radius: 4px;
+  }
+}
+
+.meta-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+.old-alt {
+  flex: 1 1 50%;
+
+  .old-alt-text {
+    color: $text-muted;
+    font-size: 0.9rem;
+    margin-top: 0.25rem;
+  }
+}
+
+.image-header {
+  margin-bottom: 1rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.image-location {
+  color: $text-muted;
+  font-size: 0.875rem;
+}
+
+.image-container {
+  margin: 1rem 0;
+  text-align: center;
+
+  img {
+    max-width: 100%;
+    max-height: 400px;
+    object-fit: contain;
+  }
+}
+
+.tags-container {
+  margin: 1rem 0;
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.tag {
+  padding: 0.25rem 0.75rem;
+  background: $background-light;
+  border-radius: 16px;
+  font-size: 0.875rem;
+  color: $text-muted;
+}
+
+.alt-text-section {
+  margin-top: 1rem;
+
+  label {
+    display: block;
+    margin-bottom: 0.5rem;
+    color: $dark-text;
+  }
+}
+
+.alt-text-input {
+  width: 100%;
+  margin: 0.5rem 0;
+  padding: 0.5rem;
+  border: 1px solid $border-color;
+  border-radius: 4px;
+  resize: vertical;
+  min-height: 80px;
+
+  &:focus {
+    outline: none;
+    border-color: $primary-color;
+    box-shadow: 0 0 0 2px rgba($primary-color, 0.2);
+  }
+}
+
+.alt-text-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+
+  @media (max-width: 600px) {
+    flex-direction: column;
+  }
+}
+
+.action-buttons {
+  margin-top: 2rem;
+  display: flex;
+  gap: 1rem;
+  justify-content: flex-end;
+
+  @media (max-width: 600px) {
+    flex-direction: column;
+  }
+}

@@ -1,0 +1,24 @@
+# Transformers and acceleration (loose upper bounds to avoid breaking upgrades)
+transformers>=4.30.0,<6.0
+accelerate>=0.20.0,<2.0
+# flash-attn and bitsandbytes are OPTIONAL; install only if your GPU/tooling supports them
+# For Hopper/CUDA 12.x environments these are recommended.
+flash-attn>=2.0.0,<3.0
+bitsandbytes>=0.39.0,<1.0
+
+# Core dependencies
+pillow>=9.5.0,<12.0
+sentence-transformers>=2.2.0,<4.0
+# LangChain and related packages are optional but recommended for RAG integration.
+langchain>=0.1.0,<1.0
+langchain-community>=0.0.20,<2.0
+langchain-huggingface>=0.0.1,<2.0
+# FAISS and byaldi are optional and may require GPU-specific builds. Install faiss/faiss-gpu and byaldi as needed.
+# For Hopper GPU machines install the GPU-enabled builds.
+faiss-gpu>=1.7.0,<2.0
+byaldi>=0.0.4,<1.0
+colpali-engine
+
+# Document processing
+python-docx>=0.8.11,<2.0
+python-pptx>=0.6.21,<2.0
