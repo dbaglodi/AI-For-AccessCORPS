@@ -1,12 +1,6 @@
-wheel
-ninja
-packaging
-
-# NOTE: For GPU/Hopper setups, install the appropriate PyTorch wheel for your CUDA
-# toolchain following the official PyTorch instructions. The lines below are
-# liberal ranges to avoid tight pinning in development. If you need a specific
-# CUDA build (e.g. +cu121), install that wheel separately and pin it in your
-# deployment/install scripts.
-torch>=2.0.0,<3.0
-torchvision>=0.15.0,<3.0
-torchaudio>=2.0.0,<3.0
+# STEP 1: Install this file first
+# Pinned PyTorch versions for CUDA 12.1
+-f https://download.pytorch.org/whl/torch_stable.html
+torch==2.1.0+cu121
+torchvision==0.16.0+cu121
+torchaudio==2.1.0+cu121
