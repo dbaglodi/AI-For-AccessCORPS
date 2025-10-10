@@ -21,6 +21,37 @@ sys.path.insert(0, str(project_root))
 
 app = FastAPI()
 
+# --- START OF NEW CODE ---
+@app.on_event("startup")
+def startup_event():
+    """
+    Check disk space on startup and clear the Hugging Face cache if space is low.
+    """
+    try:
+        # Define a safe threshold in Gigabytes
+        threshold_gb = 15.0
+        cache_dir = os.path.join(os.path.expanduser('~'), '.cache', 'huggingface')
+
+        if os.path.exists(cache_dir):
+            # Get disk usage for the partition where the cache is located
+            total, used, free = shutil.disk_usage(cache_dir)
+            free_gb = free / (1024**3)
+            
+            logging.warning(f"Checking Hugging Face cache disk space: {free_gb:.2f} GB free.")
+            
+            if free_gb < threshold_gb:
+                logging.warning(f"Free space is below {threshold_gb} GB threshold. Clearing cache...")
+                shutil.rmtree(cache_dir)
+                logging.warning("Cache cleared successfully.")
+                # Recreate the base directory so transformers doesn't complain
+                os.makedirs(cache_dir, exist_ok=True)
+        else:
+            logging.warning("Hugging Face cache directory not found. Skipping disk space check.")
+    except Exception as e:
+        logging.error(f"Error during startup cache check: {e}")
+
+# --- END OF NEW CODE ---
+
 # Load environment variables from .env file
 load_dotenv()
 

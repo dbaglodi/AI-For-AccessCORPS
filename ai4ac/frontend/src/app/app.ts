@@ -112,7 +112,7 @@ export class AppComponent {
     });
   }
 
-  fetchImages() {
+fetchImages() {
     if (!this.fileId) return;
     this.loadingImages = true;
     this.http.get<any>(`http://localhost:8000/images/${this.fileId}`).subscribe({
@@ -137,7 +137,7 @@ export class AppComponent {
           // Processing complete, show images (final)
           this.images = res.images.map((img: any, idx: number) => ({
             ...img,
-            userAltText: img.alt_text,
+            userAltText: img.generated_alt_text, // Use the newly generated text for the editable field
             idx
           }));
           // Set active index to the most recently generated (last) image

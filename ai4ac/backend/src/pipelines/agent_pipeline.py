@@ -1,6 +1,8 @@
 import sys
 import os
+import shutil
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import subprocess
 
 from docx import Document
 from pptx import Presentation
@@ -18,6 +20,8 @@ import concurrent.futures
 import threading
 import math
 from typing import Optional
+from src.config.gpu_config import get_gpu_settings
+from src.models.vision_processor import get_model
 
 # Corrected imports: Use the specific processor and the correct model class
 from transformers import Idefics3Processor, AutoModelForVision2Seq
@@ -99,48 +103,59 @@ def limit_chunks(texts, max_chunks=MAX_CHUNKS):
         return texts[:max_chunks]
     return texts
 
+def _clear_hf_cache(log):
+    """Directly removes the Hugging Face cache directory."""
+    try:
+        # Get the default cache path (usually ~/.cache/huggingface)
+        cache_dir = os.path.join(os.path.expanduser('~'), '.cache', 'huggingface')
+        if os.path.exists(cache_dir):
+            log.warning(f"Disk quota likely exceeded. Deleting cache directory: {cache_dir}")
+            shutil.rmtree(cache_dir)
+            log.info("Hugging Face cache directory successfully removed.")
+        else:
+            log.warning("Hugging Face cache directory not found, nothing to delete.")
+    except Exception as e:
+        log.error(f"Failed to clear Hugging Face cache automatically: {e}")
+
+
 def get_rag_model(logger_instance=None):
     global _rag_model_cache
     with _rag_lock:
         if _rag_model_cache: return _rag_model_cache
         
         log = logger_instance or logger
+        gpu_settings = get_gpu_settings()
+        log.info(f"Using GPU settings: {gpu_settings}")
 
-        # FIX: Swapped to make the larger SmolVLM the primary model
+        hf_token = os.environ.get("HF_TOKEN")
+        cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data", "cache")
+
         primary_model_id = "HuggingFaceTB/SmolVLM-Instruct"
+        
         try:
             log.info(f"Attempting to load primary RAG model: {primary_model_id}")
-            processor = Idefics3Processor.from_pretrained(primary_model_id, trust_remote_code=True)
+            processor = Idefics3Processor.from_pretrained(primary_model_id, trust_remote_code=True, token=hf_token, cache_dir=cache_dir)
+            
+            # Use "eager" attention for compatibility
             model = AutoModelForVision2Seq.from_pretrained(
-                primary_model_id, 
-                torch_dtype=torch.float16, 
-                low_cpu_mem_usage=True,
-                load_in_4bit=True, 
+                primary_model_id,
+                torch_dtype=gpu_settings["dtype"],
+                attn_implementation="eager", # <--- This is the fix
                 device_map="auto",
-                trust_remote_code=True
+                trust_remote_code=True,
+                token=hf_token,
+                cache_dir=cache_dir
             )
+            model.tie_weights() # Added to resolve the "weights are not tied" warning
+
             log.info(f"Successfully loaded primary RAG pipeline with {primary_model_id}.")
-            _rag_model_cache = {
-                "model": model, "processor": processor,
-                "text_rag": LangChainRAG() if LANGCHAIN_AVAILABLE else SimpleTextRAG(),
-                "type": "vision_model"
-            }
+            _rag_model_cache = { "model": model, "processor": processor, "text_rag": LangChainRAG() if LANGCHAIN_AVAILABLE else SimpleTextRAG(), "type": "vision_model" }
             return _rag_model_cache
+
         except Exception as e:
             log.error(f"Failed to load primary model {primary_model_id}: {e}")
-
-        # Fallback to the text-only RAG if vision models fail
-        try:
-            if LANGCHAIN_AVAILABLE:
-                log.warning("Falling back to LangChain-based text RAG.")
-                _rag_model_cache = { "model": None, "processor": None, "text_rag": LangChainRAG(), "type": "langchain"}
-                return _rag_model_cache
-        except Exception as e:
-            log.error(f"Failed to load LangChain RAG: {e}")
-
-        log.warning("Falling back to SimpleTextRAG (keyword matching only).")
-        _rag_model_cache = { "model": None, "processor": None, "text_rag": SimpleTextRAG(), "type": "simple"}
-        return _rag_model_cache
+            _rag_model_cache = { "model": None, "processor": None, "text_rag": SimpleTextRAG(), "type": "simple"}
+            return _rag_model_cache
 
 def extract_document_metadata(file_path, ext):
     all_text, headings = [], []
@@ -202,8 +217,9 @@ def classify_and_generate_alt_text(image_bytes, context_text="", rag_system=None
 
         logger.warning("Falling back to smaller vision model (SmolVLM-256M-Instruct).")
         vision_model = get_model() # This is now the smaller fallback
-        if vision_model and vision_model.model:
-            return ["Other"], vision_model.process_image(processed_image, "Generate a short alt text.")
+        if vision_model and vision_model.get("model"):
+            from src.models.vision_processor import process_image as process_fallback_image
+            return ["Other"], process_fallback_image(processed_image, "Generate a short alt text.")
         
         logger.error("All vision models failed to load.")
         return ["Other"], "Image could not be processed."
@@ -246,7 +262,14 @@ def run_agent_pipeline(file_path, ext, progress_callback=None, partial_save_dir=
                 if progress_callback: progress_callback(f"Processing image {processed_count}/{total_images}", processed_count, total_images)
             import base64
             b64_image = base64.b64encode(task['bytes']).decode('utf-8')
-            return {"classification": categories, "alt_text": alt_text or task["alt"] or f"Image {task_idx + 1}","image_idx": task_idx + 1, "slide_num": task.get("slide_num"),"image_data": f"data:image/jpeg;base64,{b64_image}"}
+            return {
+                "classification": categories,
+                "alt_text": task["alt"],  # This will be the original alt text
+                "generated_alt_text": alt_text or task["alt"] or f"Image {task_idx + 1}", # The newly generated text
+                "image_idx": task_idx + 1,
+                "slide_num": task.get("slide_num"),
+                "image_data": f"data:image/jpeg;base64,{b64_image}"
+            }
         except Exception as e:
             logger.error(f"Error processing image {task_idx+1}: {e}")
             return None
