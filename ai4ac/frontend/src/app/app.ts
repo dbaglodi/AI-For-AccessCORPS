@@ -199,11 +199,14 @@ fetchImages() {
       const exists = id !== null && this.images.some(i => (i.image_idx ?? i.idx) === id);
 
       if (!exists) {
+        // --- START MODIFICATION ---
         const mapped = {
           ...img,
-          userAltText: img.alt_text || '', // Ensure userAltText is always set
+          // Prioritize newly generated text for the editable field
+          userAltText: img.generated_alt_text || img.alt_text || '',
           idx: this.images.length,
         };
+        // --- END MODIFICATION ---
         this.images.push(mapped);
         hasNewImages = true;
         console.log(`Added new image ${mapped.idx + 1}: ${mapped.alt_text}`);
@@ -268,7 +271,10 @@ fetchImages() {
 
   acceptSuggestedAltText(index: number) {
     if (index >= 0 && index < this.images.length) {
-      this.images[index].userAltText = this.images[index].alt_text;
+      // --- START MODIFICATION ---
+      // Revert to the AI-generated alt text, not the original one.
+      this.images[index].userAltText = this.images[index].generated_alt_text;
+      // --- END MODIFICATION ---
     }
   }
 

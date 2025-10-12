@@ -3,6 +3,7 @@ import os
 import shutil
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import subprocess
+from pathlib import Path
 
 from docx import Document
 from pptx import Presentation
@@ -128,7 +129,20 @@ def get_rag_model(logger_instance=None):
         log.info(f"Using GPU settings: {gpu_settings}")
 
         hf_token = os.environ.get("HF_TOKEN")
-        cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data", "cache")
+        
+        # --- START OF MODIFICATION: Custom Cache Directory ---
+        # Define cache directory inside the scratch folder.
+        # This assumes the project structure is /path/to/scratch/ai4ac/
+        try:
+            # Navigate up from .../backend/src/pipelines/agent_pipeline.py to the 'scratch' directory
+            scratch_dir = Path(__file__).resolve().parents[4]
+            cache_dir = scratch_dir / ".cache" / "huggingface"
+            os.makedirs(cache_dir, exist_ok=True)
+            log.info(f"Using custom cache directory: {cache_dir}")
+        except IndexError:
+            log.warning("Could not determine scratch directory structure. Falling back to default Hugging Face cache.")
+            cache_dir = None
+        # --- END OF MODIFICATION ---
 
         primary_model_id = "HuggingFaceTB/SmolVLM-Instruct"
         
@@ -190,22 +204,56 @@ def retrieve_context(rag_system, query, k=2):
         logger.warning(f"Text retrieval failed: {e}")
         return ""
 
-def classify_and_generate_alt_text(image_bytes, context_text="", rag_system=None):
-    logger.info(f"Generating alt text with RAG type: {rag_system.get('type', 'none') if rag_system else 'none'}")
+def classify_and_generate_alt_text(image_bytes, context_text="", rag_system=None, ext=".pptx"):
+    logger.info(f"Generating alt text for {ext} with RAG type: {rag_system.get('type', 'none') if rag_system else 'none'}")
     processed_image = preprocess_image(image_bytes)
     try:
         if rag_system and rag_system.get("model") and rag_system["type"] == "vision_model":
             model, processor = rag_system["model"], rag_system["processor"]
-            rag_context = retrieve_context(rag_system, context_text)
-            
-            messages = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": f"Based on the context '{rag_context}', provide a concise, accessible alt text for this image."}]}]
+
+            # --- START OF MODIFICATION: Improved RAG and Prompt ---
+            rag_context = ""
+            # For docx, use a two-step process to get better context
+            if ext == ".docx":
+                # Step 1: Generate keywords from the image without context
+                keyword_messages = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "Describe this image in 5 keywords."}]}]
+                keyword_prompt = processor.apply_chat_template(keyword_messages, add_generation_prompt=True)
+                inputs = processor(text=keyword_prompt, images=Image.open(io.BytesIO(processed_image)), return_tensors="pt").to(model.device)
+                
+                with torch.inference_mode():
+                    output = model.generate(**inputs, max_new_tokens=20)
+                
+                output_ids = output[0][len(inputs["input_ids"][0]):]
+                keywords = processor.decode(output_ids, skip_special_tokens=True).strip()
+                logger.info(f"Generated keywords for RAG query: {keywords}")
+                
+                # Step 2: Use keywords to retrieve context
+                rag_context = retrieve_context(rag_system, keywords, k=3)
+            else:
+                # For pptx, the slide context is usually good enough
+                rag_context = retrieve_context(rag_system, context_text, k=2)
+
+            # A more detailed prompt for generating high-quality alt text
+            final_prompt_text = (
+                f"CONTEXT: \"{rag_context}\"\n\n"
+                "TASK: Analyze the image based on the context and generate a concise, objective, and descriptive alt text for screen reader users.\n"
+                "RULES:\n"
+                "1. Be objective. Describe only what you see.\n"
+                "2. Be concise. Aim for under 125 characters.\n"
+                "3. Do NOT start with 'Image of' or 'Picture of'.\n"
+                "4. If the image contains text, include it.\n"
+                "5. Focus on the image's main subject and purpose within the document's context.\n\n"
+                "ALT TEXT:"
+            )
+            # --- END OF MODIFICATION ---
+
+            messages = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": final_prompt_text}]}]
             prompt = processor.apply_chat_template(messages, add_generation_prompt=True)
             inputs = processor(text=prompt, images=Image.open(io.BytesIO(processed_image)), return_tensors="pt").to(model.device)
 
             with torch.inference_mode():
                 output = model.generate(**inputs, max_new_tokens=100)
             
-            # FIX: Correctly slice the output to get only the generated text
             output_ids = output[0][len(inputs["input_ids"][0]):]
             alt_text = processor.decode(output_ids, skip_special_tokens=True).strip()
 
@@ -256,7 +304,8 @@ def run_agent_pipeline(file_path, ext, progress_callback=None, partial_save_dir=
     def process_single_image(task_idx, task):
         nonlocal processed_count
         try:
-            categories, alt_text = classify_and_generate_alt_text(task["bytes"], task["context"], rag_system)
+            # Pass file extension to the generation function for smarter RAG
+            categories, alt_text = classify_and_generate_alt_text(task["bytes"], task["context"], rag_system, ext=ext)
             with _results_lock:
                 processed_count += 1
                 if progress_callback: progress_callback(f"Processing image {processed_count}/{total_images}", processed_count, total_images)

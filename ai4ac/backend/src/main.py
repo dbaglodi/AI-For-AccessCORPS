@@ -21,7 +21,7 @@ sys.path.insert(0, str(project_root))
 
 app = FastAPI()
 
-# --- START OF NEW CODE ---
+# --- START OF MODIFICATION ---
 @app.on_event("startup")
 def startup_event():
     """
@@ -30,11 +30,22 @@ def startup_event():
     try:
         # Define a safe threshold in Gigabytes
         threshold_gb = 15.0
-        cache_dir = os.path.join(os.path.expanduser('~'), '.cache', 'huggingface')
+        
+        # This path must match the one used in agent_pipeline.py
+        try:
+            # Assumes the project structure is /path/to/scratch/ai4ac/
+            # Navigate up from .../backend/src/main.py to the 'scratch' directory
+            scratch_dir = Path(__file__).resolve().parents[3]
+            cache_dir = scratch_dir / ".cache" / "huggingface"
+            logging.warning(f"Using custom cache directory for disk space check: {cache_dir}")
+        except IndexError:
+            logging.warning("Could not determine scratch directory structure. Using default Hugging Face cache for check.")
+            cache_dir = os.path.join(os.path.expanduser('~'), '.cache', 'huggingface')
+
 
         if os.path.exists(cache_dir):
             # Get disk usage for the partition where the cache is located
-            total, used, free = shutil.disk_usage(cache_dir)
+            total, used, free = shutil.disk_usage(str(cache_dir))
             free_gb = free / (1024**3)
             
             logging.warning(f"Checking Hugging Face cache disk space: {free_gb:.2f} GB free.")
@@ -46,11 +57,11 @@ def startup_event():
                 # Recreate the base directory so transformers doesn't complain
                 os.makedirs(cache_dir, exist_ok=True)
         else:
-            logging.warning("Hugging Face cache directory not found. Skipping disk space check.")
+            logging.warning(f"Hugging Face cache directory not found: {cache_dir}. Skipping disk space check.")
     except Exception as e:
         logging.error(f"Error during startup cache check: {e}")
 
-# --- END OF NEW CODE ---
+# --- END OF MODIFICATION ---
 
 # Load environment variables from .env file
 load_dotenv()
