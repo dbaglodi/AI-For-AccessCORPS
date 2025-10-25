@@ -5,10 +5,21 @@ from pathlib import Path
 BASE_DIR = Path(__file__).parent.parent.parent
 UPLOAD_DIR = BASE_DIR / "data" / "uploads" 
 PROCESSED_DIR = BASE_DIR / "data" / "processed"
-CACHE_DIR = BASE_DIR / "data" / "cache"
+# --- START OF MODIFICATION: Centralize cache directory path ---
+# Define a single, consistent cache path to be used across the application.
+# This ensures that both model downloading and cache clearing target the same directory.
+try:
+    # Assumes the structure is /scratch/{project_folder}/ai4ac/backend
+    SCRATCH_DIR = BASE_DIR.parent.parent
+    CUSTOM_CACHE_DIR = SCRATCH_DIR / ".cache" / "huggingface"
+except IndexError:
+    # Fallback to a local cache within the project if the scratch structure isn't present
+    CUSTOM_CACHE_DIR = BASE_DIR / "data" / "cache"
+# --- END OF MODIFICATION ---
+
 
 # Ensure directories exist
-for dir_path in [UPLOAD_DIR, PROCESSED_DIR, CACHE_DIR]:
+for dir_path in [UPLOAD_DIR, PROCESSED_DIR, CUSTOM_CACHE_DIR]:
     dir_path.mkdir(parents=True, exist_ok=True)
 
 # Agent settings from environment
