@@ -192,43 +192,31 @@ def retrieve_rag_context(text_rag_instance, query, k=2):
         logger.warning(f"Text retrieval failed: {e}")
         return ""
 
-# --- START MODIFICATION: Prompt function ULTRA simplified for PaliGemma ---
+# --- Prompt function using simplified structure for PaliGemma ---
 def create_alt_text_prompt(
     structured_context: Dict[str, Optional[str]],
-    existing_alt: str, # Existing alt isn't used in this simplified prompt
+    existing_alt: str,
     model_format="paligemma"
 ) -> str:
     """Creates a prompt tailored to the specified model format."""
-
     prompt_parts = []
-
-    # --- Combine Context into a single string ---
     context_lines = []
     if structured_context.get("doc_title"):
         context_lines.append(f"Document Title: {structured_context['doc_title']}")
     if structured_context.get("slide_title"):
         context_lines.append(f"Slide Title/Header: {structured_context['slide_title']}")
     if structured_context.get("surrounding_text"):
-        context_lines.append(f"Surrounding Text: {structured_context['surrounding_text'][:300]}") # Limit length
-    # Remove existing alt from context for this simpler prompt
-
+        context_lines.append(f"Surrounding Text: {structured_context['surrounding_text'][:300]}")
     combined_context = ". ".join(filter(None, context_lines)) if context_lines else "No text context provided."
 
     if model_format == "paligemma":
-        # Ultra-Simplified PaliGemma prompt: Context -> Simple Instruction -> Cue
         prompt_parts.append("<image>\n")
         prompt_parts.append(f"Context: {combined_context}. ")
-        # Minimal Instruction - focus on description, mention key rules implicitly
         prompt_parts.append("Describe the image concisely for alt text (max 120 chars), focusing on its purpose/meaning in context. For charts/matrices, describe type/topic/trend, not labels/values.\n")
-        # Cue
         prompt_parts.append("Alt Text:")
-
     elif model_format == "smolvlm":
-         # Keep QnA style for SmolVLM (using detailed guidelines implicitly via the question)
-         # Re-add existing alt to SmolVLM context
-         if existing_alt:
-             combined_context += f". Existing Alt Text (Ignore if poor): {existing_alt}"
-
+         # QnA style for SmolVLM
+         if existing_alt: combined_context += f". Existing Alt Text (Ignore if poor): {existing_alt}"
          question = (
             "Write a concise alt text (max 120 chars) describing the image's key information and purpose in this context. "
             "Avoid starting with 'Image of'. "
@@ -238,10 +226,8 @@ def create_alt_text_prompt(
          prompt_parts.append("<image>\n")
          prompt_parts.append(f"Context: {combined_context}\n")
          prompt_parts.append(f"Question: {question}\n")
-         prompt_parts.append("Answer:") # Cue for the model
-
+         prompt_parts.append("Answer:")
     return "".join(prompt_parts)
-# --- END MODIFICATION ---
 
 
 def classify_and_generate_alt_text(
@@ -254,12 +240,10 @@ def classify_and_generate_alt_text(
     task_idx: int = 0
 ):
     """Generate alt text using primary model (PaliGemma), falling back if necessary."""
-
     logger.info(f"Generating alt text for image {task_idx+1} ({ext})")
     processed_image = preprocess_image(image_bytes)
     alt_text = ""
     categories = ["Other"]
-
     primary_model_loaded = primary_model_system and primary_model_system.get("model") and primary_model_system.get("type") == "vision_model_paligemma"
 
     if primary_model_loaded:
@@ -267,119 +251,84 @@ def classify_and_generate_alt_text(
         try:
             model, processor = primary_model_system["model"], primary_model_system["processor"]
             gpu_settings = get_gpu_settings()
-
-            # --- Use ultra-simplified prompt for PaliGemma ---
-            prompt_text = create_alt_text_prompt(
-                structured_context, existing_alt, model_format="paligemma"
-            )
+            prompt_text = create_alt_text_prompt(structured_context, existing_alt, model_format="paligemma")
             logger.debug(f"Primary prompt (PaliGemma):\n{prompt_text}")
-
             image = Image.open(io.BytesIO(processed_image))
             inputs = processor(text=prompt_text, images=image, return_tensors="pt").to(gpu_settings["device"])
-
             with torch.inference_mode():
-                # --- Keep do_sample=False for PaliGemma ---
-                generated_ids = model.generate(
-                    **inputs,
-                    max_new_tokens=250,
-                    do_sample=False
-                 )
+                generated_ids = model.generate(**inputs, max_new_tokens=250, do_sample=False)
                 prompt_len = inputs["input_ids"].shape[1]
                 alt_text = processor.decode(generated_ids[0][prompt_len:], skip_special_tokens=True).strip()
-
             logger.info(f"Primary model (PaliGemma) generated raw: '{alt_text}'")
-
         except Exception as e:
             logger.error(f"Error generating alt text with primary model (PaliGemma): {e}", exc_info=True)
             alt_text = "" # Trigger fallback
-
     else:
-        if primary_model_system is None or primary_model_system.get("type") == "failed":
-             logger.warning("Primary model (PaliGemma) failed to load.")
-        elif not primary_model_loaded:
-             logger.warning(f"Primary model (PaliGemma) not loaded or incorrect type ('{primary_model_system.get('type')}').")
+        # Log reason for not using primary
+        if primary_model_system is None or primary_model_system.get("type") == "failed": logger.warning("Primary model (PaliGemma) failed to load.")
+        elif not primary_model_loaded: logger.warning(f"Primary model (PaliGemma) not loaded or incorrect type ('{primary_model_system.get('type')}').")
         alt_text = ""
 
-    # --- Fallback Logic ---
-    # Define patterns to check if the generated text is helpful
+    # Fallback Logic
     unhelpful_patterns_check = [
         r"unanswerable", r"i am unable to", r"i cannot answer", r"cannot provide",
-        r"sorry, as a base vlm", # Add the new refusal phrase
+        r"sorry, as a base vlm", # Added refusal
         r"does not require looking at the image", r"image contains text", r"image shows text",
         r"Groundtruth label", r"Predicted label", r"All Points", r"Critical Points",
         r"GroundTruth label", r"quarterly spending graph",
         r"Purpose/Purpose:", r"List of Extra Readings", r"Christopher's Broken fish",
         r"Image of:", r"Write a concise alt text", r"Answer:", r"Context:", r"Question:",
         r"CRITICAL Rules:", r"DO NOT repeat this prompt", r"Generated Alt Text:",
-        r"Describe the image concisely" # Added from latest PaliGemma prompt attempt
+        r"Describe the image concisely"
     ]
-    # Check if alt_text is empty or contains unhelpful patterns
     is_unhelpful = not alt_text or any(re.search(pattern, alt_text, re.IGNORECASE) for pattern in unhelpful_patterns_check)
 
     if is_unhelpful:
-        # Log reason for fallback
         if not primary_model_loaded: logger.warning("Attempting fallback because primary model didn't load.")
         elif not alt_text: logger.warning("Attempting fallback because primary model produced empty output.")
         else: logger.warning(f"Primary model output was unhelpful or copied prompt: '{alt_text}'. Attempting fallback.")
-
         try:
             fallback_model_info = get_fallback_model() # Get SmolVLM info
             if fallback_model_info and fallback_model_info.get("model"):
                 logger.info("Using fallback vision model (SmolVLM).")
                 from src.models.vision_processor import process_image as process_fallback_image
-
-                # Use the QnA prompt style for SmolVLM
-                fallback_prompt = create_alt_text_prompt(
-                     structured_context, existing_alt, model_format="smolvlm"
-                )
+                fallback_prompt = create_alt_text_prompt(structured_context, existing_alt, model_format="smolvlm")
                 logger.debug(f"Fallback prompt:\n{fallback_prompt}")
                 alt_text = process_fallback_image(processed_image, fallback_prompt)
                 logger.info(f"Fallback model generated raw: '{alt_text}'")
             else:
                  logger.error("Fallback model (SmolVLM) also failed to load.")
-                 alt_text = "Image could not be processed."
-                 categories = ["Needs Review"]
+                 alt_text = "Image could not be processed."; categories = ["Needs Review"]
         except Exception as fallback_e:
              logger.error(f"Error during fallback generation: {fallback_e}", exc_info=True)
-             alt_text = "Fallback model error."
-             categories = ["Needs Review"]
+             alt_text = "Fallback model error."; categories = ["Needs Review"]
 
-    # --- Final Post-processing ---
-    # Clean up tokens and leading/trailing quotes/prefixes
+    # Final Post-processing
     alt_text = alt_text.replace("<|end|>", "").replace("<image>", "").replace("ASSISTANT:", "").replace("USER:", "").strip()
     alt_text = re.sub(r'^["\']|["\']$', '', alt_text)
     alt_text = re.sub(r"^(Answer:|Alt Text:)\s*", "", alt_text, flags=re.IGNORECASE).strip()
 
-
-    # Define patterns for cleanup, including parts of the prompt
     cleanup_patterns = [
         r"unanswerable", r"i am unable to", r"i cannot answer", r"unable to provide",
         r"sorry, as a base vlm", # Added refusal
         r"does not require looking at the image", r"cannot provide alt text",
         r"based on the provided context", r"the image (?:depicts|shows|contains|is)\b", r"alt text\s*:",
         r"^(?:description|informative alt text|output|instruction|generated alt text|context:|question:|answer:|alt text:)\s*:", r"^\s*-\s+",
-        # Specific bad outputs
         r"Groundtruth label", r"Predicted label", r"All Points", r"Critical Points",
         r"GroundTruth label", r"quarterly spending graph",
-        # Parts of the prompt that might get copied
         r"Purpose/Purpose:", r"List of Extra Readings", r"Christopher's Broken fish",
         r"Write a concise alt text", r"Document Title:", r"Slide Title/Header:",
         r"Surrounding Text Snippet:", r"Existing Alt Text:", r"TASK:",
         r"Image of:", r"CRITICAL Rules:", r"DO NOT repeat this prompt", r"DO NOT start with 'Image of'",
-        r"Generated Alt Text:", r"Describe the image concisely" # Added from latest prompt attempt
+        r"Generated Alt Text:", r"Describe the image concisely"
     ]
-
     original_alt_text_before_cleanup = alt_text
     is_refusal_or_irrelevant = False
-    # Simplified refusal check
     refusal_keywords = ["unanswerable", "unable to", "cannot answer", "cannot provide", "sorry, as a base vlm"]
     if any(keyword in alt_text.lower() for keyword in refusal_keywords):
         logger.warning(f"Detected refusal keyword in output: '{alt_text}'. Clearing.")
-        alt_text = ""
-        categories = ["Needs Review"]
-        is_refusal_or_irrelevant = True
+        alt_text = ""; categories = ["Needs Review"]; is_refusal_or_irrelevant = True
 
-    # Check for irrelevant readings if not a refusal
     if not is_refusal_or_irrelevant:
         irrelevant_patterns = [
              r"Groundtruth label", r"Predicted label", r"All Points", r"Critical Points",
@@ -391,80 +340,55 @@ def classify_and_generate_alt_text(
              if cleaned_alt and cleaned_pattern and (cleaned_alt.lower() == cleaned_pattern.lower() or cleaned_alt.lower().startswith(cleaned_pattern.lower())):
                  if len(cleaned_alt) < len(cleaned_pattern) + 15:
                      logger.warning(f"Detected irrelevant text reading '{pattern}' dominating output: '{alt_text}'. Clearing.")
-                     alt_text = ""
-                     categories = ["Needs Review"]
-                     is_refusal_or_irrelevant = True
-                     break
+                     alt_text = ""; categories = ["Needs Review"]; is_refusal_or_irrelevant = True; break
 
-    # General cleanup if not cleared above
     if not is_refusal_or_irrelevant:
-        # Remove specific cleanup patterns (more aggressively)
         for pattern in cleanup_patterns:
-             # Remove prefix occurrences
              alt_text = re.sub(f"^{pattern}\\s*", "", alt_text, flags=re.IGNORECASE | re.MULTILINE).strip()
-             # Remove exact phrase occurrences anywhere
              escaped_pattern = re.escape(pattern.strip('\\b^$'))
-             # Be careful with overly broad patterns like "Context:"
-             if len(escaped_pattern) > 5: # Only remove longer/more specific patterns fully
-                 alt_text = re.sub(escaped_pattern, "", alt_text, flags=re.IGNORECASE).strip()
-
-        # General cleanup
-        alt_text = re.sub(r'\s{2,}', ' ', alt_text).strip() # Consolidate spaces
-        alt_text = re.sub(r"^\d+\.\s*", "", alt_text).strip() # Remove leading list numbers
-        # Remove trailing colons, list markers if they appear alone
+             if len(escaped_pattern) > 5: alt_text = re.sub(escaped_pattern, "", alt_text, flags=re.IGNORECASE).strip()
+        alt_text = re.sub(r'\s{2,}', ' ', alt_text).strip()
+        alt_text = re.sub(r"^\d+\.\s*", "", alt_text).strip()
         alt_text = re.sub(r'^[:\-\*]\s*', '', alt_text).strip()
         alt_text = re.sub(r'\s*[:\-\*]$', '', alt_text).strip()
 
-
-    # Handle potential truncation indicator "..." and ensure sentence end
-    # --- Refined truncation cleanup ---
+    # Improved Truncation/Punctuation
     if alt_text.endswith("..."):
         logger.info(f"Cleaning trailing ellipsis from: '{alt_text}'")
         alt_text = alt_text[:-3].strip()
         last_punct_match = re.search(r'[.!?]\s*$', alt_text[-25:])
-        if last_punct_match:
-             alt_text = alt_text[:-(25-last_punct_match.end())]
+        if last_punct_match: alt_text = alt_text[:-(25-last_punct_match.end())]
         else:
              last_space = alt_text.rfind(' ')
              if last_space != -1: alt_text = alt_text[:last_space]
              if alt_text and alt_text[-1] not in ['.','!','?']: alt_text += '.'
-    elif len(alt_text) > 10 and alt_text[-1] not in ['.','!','?']:
-         alt_text += '.'
+    elif len(alt_text) > 10 and alt_text[-1] not in ['.','!','?']: alt_text += '.'
 
-    # Final length check
     max_len = 120
     if len(alt_text) > max_len:
          logger.warning(f"Alt text STILL exceeds {max_len} chars after cleanup ('{alt_text}'). Final truncation.")
-         limit = max_len
-         last_sentence_end = -1
-         for punct in ['.', '!', '?']:
-             pos = alt_text[:limit].rfind(punct)
-             if pos > last_sentence_end: last_sentence_end = pos
-
-         if last_sentence_end > limit - 30: # Only truncate at sentence end if it's near the limit
-             alt_text = alt_text[:last_sentence_end + 1].strip()
-         else: # Fallback to last space
+         limit = max_len; last_sentence_end = -1
+         for punct in ['.', '!', '?']: pos = alt_text[:limit].rfind(punct); last_sentence_end = max(last_sentence_end, pos)
+         if last_sentence_end > limit - 30: alt_text = alt_text[:last_sentence_end + 1].strip()
+         else:
              last_space_before_limit = alt_text[:limit].rfind(' ')
              if last_space_before_limit != -1:
                  alt_text = alt_text[:last_space_before_limit].strip()
                  if alt_text and alt_text[-1] not in ['.','!','?']: alt_text += '.'
-             else: # Hard truncate
+             else:
                  alt_text = alt_text[:limit]
                  if alt_text and alt_text[-1] not in ['.','!','?']: alt_text += '.'
 
-    # Handle empty alt text after all cleanup/failures
+    # Handle empty alt text
     if not alt_text:
          logger.warning("Alt text became empty after cleanup/failure, using existing or placeholder.")
          alt_text = existing_alt
          if not alt_text:
-             idx_str = f" {task_idx + 1}" if task_idx is not None else ""
-             alt_text = f"Image{idx_str}" + (f" on Slide {slide_num}" if slide_num else "")
+             idx_str = f" {task_idx + 1}" if task_idx is not None else ""; alt_text = f"Image{idx_str}" + (f" on Slide {slide_num}" if slide_num else "")
              if categories != ["Needs Review"]: categories = ["Needs Review"]
-         elif categories != ["Needs Review"]:
-             if any(w in existing_alt.lower() for w in ["chart", "graph", "plot", "matrix", "table", "diagram"]): categories = ["Chart"]
-             else: categories = ["Other"]
+         elif categories != ["Needs Review"]: categories = ["Chart"] if any(w in existing_alt.lower() for w in ["chart", "graph", "plot", "matrix", "table", "diagram"]) else ["Other"]
 
-    # Re-categorize based on final alt_text if not already marked for review
+    # Re-categorize
     if categories != ["Needs Review"]:
         final_alt_lower = alt_text.lower()
         if any(w in final_alt_lower for w in ["chart", "graph", "plot", "matrix", "table"]): categories = ["Chart"]
@@ -475,9 +399,7 @@ def classify_and_generate_alt_text(
         else: categories = ["Other"]
 
     final_alt_text_to_return = alt_text
-
     logger.info(f"Final alt text for image {task_idx+1}: '{final_alt_text_to_return}' (Category: {categories})")
-
     return categories, final_alt_text_to_return
 
 
@@ -498,7 +420,6 @@ def get_context_for_image_pptx(slide: PptxSlide, shape: PptxPicture) -> Dict[str
                          title_text = placeholder.text.strip(); break
                  except (KeyError, IndexError): continue
         if title_text: context["slide_title"] = title_text.split('\n')[0]
-
     except Exception as e: logger.warning(f"Could not reliably determine slide title for slide {getattr(slide, 'slide_id', 'N/A')}: {e}")
 
     try: # Find Nearby Text
@@ -558,12 +479,8 @@ def run_agent_pipeline(file_path, ext, progress_callback=None, partial_save_dir=
     try:
         pipeline_start = time.time()
         logger.info(f"Starting pipeline for {file_path}")
+        document_metadata = {}; all_text_content = []; doc_object = None
 
-        document_metadata = {}
-        all_text_content = []
-        doc_object = None # Store docx object
-
-        # (Metadata extraction remains the same)
         if ext == ".pptx":
             try:
                 pres = Presentation(file_path)
@@ -582,16 +499,14 @@ def run_agent_pipeline(file_path, ext, progress_callback=None, partial_save_dir=
 
         full_text = "\n".join(all_text_content)
         document_metadata['summary'] = ' '.join(full_text.split()[:100])
-
-        # Prepare RAG context using SimpleTextRAG
         texts = chunk_text(full_text); texts = limit_chunks(texts)
         if texts:
             try: text_rag_instance.add_documents(texts)
             except Exception as e: logger.error(f"Failed to add documents to SimpleTextRAG: {e}")
 
-        # --- Corrected PPTX and DOCX extraction ---
         image_tasks = []
         if ext == ".pptx":
+            # --- START MODIFICATION: Use correct XML access for alt text ---
             try:
                 pres = Presentation(file_path)
                 for slide_num, slide in enumerate(pres.slides, 1):
@@ -599,7 +514,11 @@ def run_agent_pipeline(file_path, ext, progress_callback=None, partial_save_dir=
                         if isinstance(shape, PptxPicture):
                             try:
                                 img_bytes = shape.image.blob
-                                alt_text = shape.alt_text if hasattr(shape, 'alt_text') else ""
+                                # Correctly access alt text via XML element attributes safely
+                                alt_text = ""
+                                nvPr = getattr(getattr(getattr(shape, '_element', None), 'nvPicPr', None), 'cNvPr', None)
+                                if nvPr is not None:
+                                    alt_text = nvPr.attrib.get('descr', '') # Use .get()
 
                                 structured_context = get_context_for_image_pptx(slide, shape)
                                 structured_context["doc_title"] = document_metadata.get('title')
@@ -611,50 +530,41 @@ def run_agent_pipeline(file_path, ext, progress_callback=None, partial_save_dir=
                                 })
                             except Exception as img_e:
                                  shape_id_str = f"shape ID {shape.shape_id}" if hasattr(shape, 'shape_id') else "shape"
-                                 logger.warning(f"Could not extract image/context from {shape_id_str} on slide {slide_num}: {img_e}")
+                                 logger.warning(f"Could not extract image/context from {shape_id_str} on slide {slide_num}: {img_e}", exc_info=True) # Log traceback
             except Exception as e:
                 logger.error(f"Error processing PPTX file {file_path} for images: {e}", exc_info=True)
+            # --- END MODIFICATION ---
 
         elif ext == ".docx" and doc_object:
+             # (DOCX extraction logic remains the same - already uses safe .get())
             try:
                 img_counter = 0; processed_rel_ids = set()
                 for shape in doc_object.part.inline_shapes:
                     if hasattr(shape, 'type') and shape.type == 3: # WD_INLINE_SHAPE.PICTURE
                         img_counter += 1
                         try:
-                            rId = shape._inline.graphic.graphicData.pic.blipFill.blip.embed
+                            inline_el = shape._inline
+                            rId = inline_el.graphic.graphicData.pic.blipFill.blip.embed
                             if rId in processed_rel_ids: continue
-
                             rel = doc_object.part.rels[rId]
                             if not rel.is_external:
-                                img_bytes = rel.target_part.blob
-                                processed_rel_ids.add(rId)
-
+                                img_bytes = rel.target_part.blob; processed_rel_ids.add(rId)
                                 alt_text = ""
                                 try:
-                                     docPr = shape._inline.find(qn('wp:docPr'))
+                                     docPr = inline_el.find(qn('wp:docPr'))
                                      if docPr is not None: alt_text = docPr.get('descr', '')
                                 except Exception as alt_e: logger.warning(f"Error accessing docPr descr for inline shape {img_counter}: {alt_e}")
-
-                                structured_context = get_context_for_image_docx(doc_object, shape._inline)
+                                structured_context = get_context_for_image_docx(doc_object, inline_el)
                                 image_tasks.append({"bytes": img_bytes, "alt": alt_text, "structured_context": structured_context, "slide_num": None})
-
                         except Exception as shape_e: logger.error(f"Error processing inline shape {img_counter}: {shape_e}", exc_info=True)
-
-                # Fallback check (remains the same)
                 for rId, rel in doc_object.part.rels.items():
                     if "image" in rel.target_ref and not rel.is_external and rId not in processed_rel_ids:
-                        img_counter += 1
-                        logger.warning(f"Found image via rels (rId: {rId}) not caught by inline_shapes. Using basic context.")
+                        img_counter += 1; logger.warning(f"Found image via rels (rId: {rId}) not caught by inline_shapes. Using basic context.")
                         try: img_bytes = rel.target_part.blob; processed_rel_ids.add(rId)
                         except Exception as blob_e: logger.error(f"Could not read image blob for rId {rId}: {blob_e}"); continue
                         structured_context = {"doc_title": document_metadata.get('title'), "slide_title": None, "surrounding_text": document_metadata.get('summary', '')}
                         image_tasks.append({"bytes": img_bytes, "alt": "", "structured_context": structured_context, "slide_num": None})
-
-
             except Exception as e: logger.error(f"Error processing DOCX file {file_path} for images: {e}", exc_info=True)
-            # --- END MODIFICATION ---
-
 
         total_images = len(image_tasks)
         if not total_images:
@@ -666,7 +576,6 @@ def run_agent_pipeline(file_path, ext, progress_callback=None, partial_save_dir=
         executor_class = concurrent.futures.ThreadPoolExecutor
         max_workers = 1 if gpu_settings.get("device") == "cuda" else DEFAULT_MAX_WORKERS
         logger.info(f"Using {executor_class.__name__} with max_workers={max_workers}")
-
         executor = executor_class(max_workers=max_workers)
 
         def process_single_image(task_idx, task):
@@ -674,39 +583,23 @@ def run_agent_pipeline(file_path, ext, progress_callback=None, partial_save_dir=
             current_primary_model_system = _primary_model_cache
             try:
                 categories, generated_alt = classify_and_generate_alt_text(
-                    image_bytes=task["bytes"],
-                    structured_context=task["structured_context"],
-                    primary_model_system=current_primary_model_system, # Pass PaliGemma system
-                    ext=ext,
-                    existing_alt=task["alt"],
-                    slide_num=task.get("slide_num"),
-                    task_idx=task_idx
+                    image_bytes=task["bytes"], structured_context=task["structured_context"],
+                    primary_model_system=current_primary_model_system, ext=ext,
+                    existing_alt=task["alt"], slide_num=task.get("slide_num"), task_idx=task_idx
                 )
-
                 with _results_lock:
                     processed_count += 1
                     status_msg = f"Processing image {processed_count}/{total_images}"
                     if categories == ["Needs Review"]: status_msg += " (Review Recommended)"
                     if progress_callback: progress_callback(status_msg, processed_count, total_images)
-
-                # Image encoding
-                import base64
-                image_data_uri = None
+                import base64; image_data_uri = None
                 try:
                     processed_display_image = preprocess_image(task['bytes'], max_size=256)
                     b64_image = base64.b64encode(processed_display_image).decode('utf-8')
                     image_data_uri = f"data:image/jpeg;base64,{b64_image}"
-                except Exception as enc_e:
-                    logger.error(f"Could not encode image {task_idx+1} for display: {enc_e}")
-
-                return {
-                    "classification": categories,
-                    "alt_text": task["alt"], # Original
-                    "generated_alt_text": generated_alt, # Generated/Processed
-                    "image_idx": task_idx + 1,
-                    "slide_num": task.get("slide_num"),
-                    "image_data": image_data_uri
-                }
+                except Exception as enc_e: logger.error(f"Could not encode image {task_idx+1} for display: {enc_e}")
+                return {"classification": categories, "alt_text": task["alt"], "generated_alt_text": generated_alt,
+                        "image_idx": task_idx + 1, "slide_num": task.get("slide_num"), "image_data": image_data_uri}
             except Exception as e:
                 logger.error(f"Error in process_single_image task for image {task_idx+1}: {e}", exc_info=True)
                 with _results_lock:
@@ -714,27 +607,20 @@ def run_agent_pipeline(file_path, ext, progress_callback=None, partial_save_dir=
                     if progress_callback: progress_callback(f"Error processing image {processed_count}/{total_images}", processed_count, total_images)
                 return None
 
-        # Executor logic
         future_to_task = {executor.submit(process_single_image, i, task): i for i, task in enumerate(image_tasks)}
         temp_results = {}
         for future in concurrent.futures.as_completed(future_to_task):
             idx = future_to_task[future]
             try:
-                result = future.result()
-                if result:
-                    temp_results[idx] = result
-            except Exception as exc:
-                logger.error(f'Image processing task {idx + 1} generated an exception: {exc}')
+                result = future.result();
+                if result: temp_results[idx] = result
+            except Exception as exc: logger.error(f'Image processing task {idx + 1} generated an exception: {exc}')
 
         results = [temp_results[i] for i in sorted(temp_results.keys())]
-
         if progress_callback: progress_callback("Processing complete", total_images, total_images)
         logger.info(f"Pipeline finished processing {len(results)} images in {time.time() - pipeline_start:.2f}s")
         return results
-
     finally:
          if executor:
-             logger.info("Shutting down thread pool executor.")
-             executor.shutdown(wait=True)
-             logger.info("Executor shut down complete.")
+             logger.info("Shutting down thread pool executor."); executor.shutdown(wait=True); logger.info("Executor shut down complete.")
 
