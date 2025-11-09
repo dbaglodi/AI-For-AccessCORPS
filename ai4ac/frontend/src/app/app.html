@@ -11,64 +11,62 @@
   <div *ngIf="error" class="error-message">{{ error }}</div>
 
   <!-- Progress Section -->
-  <div class="status-container" *ngIf="uploadProgress > 0 || processing">
-    <!-- Upload Progress -->
-    <div class="status-step" [class.active]="uploadProgress < 100">
-      <span class="step-number">1</span>
-      <span class="step-label">Uploading</span>
-      <div class="progress-bar">
-        <div class="progress" [style.width.%]="uploadProgress"></div>
-      </div>
-      <span class="progress-text">{{ uploadProgress }}%</span>
-    </div>
-
+  <!-- --- START MODIFICATION: Simplified progress display --- -->
+  <div class="status-container" *ngIf="processing">
     <!-- Processing Progress -->
-    <div class="status-step" [class.active]="processing" *ngIf="processingStatus">
-      <span class="step-number">2</span>
-      <span class="step-label">Processing</span>
-      <div class="progress-bar">
+    <div class="status-step active" *ngIf="processingStatus">
+      <span class="step-number">1</span> <!-- Changed step number -->
+      <span class="step-label">{{ processingStatus?.status === 'uploading' ? 'Uploading' : 'Processing' }}</span>
+      <div class="progress-bar" *ngIf="processingStatus?.progress != null && processingStatus?.status !== 'uploading'">
+        <!-- Hide bar during upload -->
         <div class="progress" [style.width.%]="processingStatus?.progress || 0"></div>
       </div>
       <div class="status-details">
         <p>{{ processingStatus?.current_step }}</p>
-        <p *ngIf="processingStatus?.total_images">
+        <!-- Only show image count if total_images is available and > 0 -->
+        <p *ngIf="processingStatus?.total_images && processingStatus?.total_images > 0">
           Processing image {{ processingStatus?.processed_images }} of {{ processingStatus?.total_images }}
         </p>
       </div>
     </div>
   </div>
+  <!-- --- END MODIFICATION --- -->
+
 
   <!-- Results Section -->
   <div *ngIf="images.length" class="results-container">
     <h2>Review Images & Alt Text</h2>
 
-    <!-- Carousel / slider controls -->
+    <!-- --- START MODIFICATION: Removed slider, kept prev/next buttons --- -->
     <div class="carousel-controls">
-      <button type="button" class="secondary" (click)="prev()" [disabled]="activeIndex <= 0">◀</button>
-      <input type="range" min="0" [max]="images.length - 1" [(ngModel)]="activeIndex"
-        (change)="setActive(activeIndex)" />
-      <button type="button" class="secondary" (click)="next()" [disabled]="activeIndex >= images.length - 1">▶</button>
+      <button type="button" class="secondary nav-arrow-button" (click)="prev()"
+        [disabled]="images.length <= 1">◀</button>
+      <span class="image-counter">Image {{ activeIndex + 1 }} of {{ images.length }}</span>
+      <button type="button" class="secondary nav-arrow-button" (click)="next()"
+        [disabled]="images.length <= 1">▶</button>
     </div>
+    <!-- --- END MODIFICATION --- -->
 
-    <!-- Cards viewport -->
-    <div class="cards-viewport">
-      <div class="cards" role="list" [style.width.px]="images.length * 400">
+    <!-- --- START MODIFICATION: Added #refs for scrolling --- -->
+    <div class="cards-viewport" #cardsViewport>
+      <div class="cards" role="list" #cardsContainer>
+        <!-- --- END MODIFICATION --- -->
         <div *ngFor="let img of images; let i = index" role="listitem" class="card-wrapper"
           [class.active]="i === activeIndex" id="image-card-{{i}}">
-          <div class="image-card" [class.active]="i === activeIndex" id="image-card-{{i}}">
+          <!-- Card content remains the same -->
+          <div class="image-card" [class.active]="i === activeIndex">
             <div class="image-header">
               <strong>Image {{ i + 1 }}</strong>
               <span class="image-location" *ngIf="img.slide_num">Slide {{ img.slide_num }}</span>
             </div>
 
             <div class="image-preview">
-              <img [src]="img.image_data" [alt]="img.alt_text || 'Image preview'" />
+              <img [src]="img.image_data" [alt]="img.alt_text || 'Image preview'" loading="lazy" />
+              <!-- Added loading="lazy" -->
             </div>
 
             <div class="meta-row">
-              <!-- START MODIFICATION: Clarified label -->
               <div class="old-alt"><label>Original Alt Text:</label>
-              <!-- END MODIFICATION -->
                 <div class="old-alt-text">{{ img.alt_text || '—' }}</div>
               </div>
               <div class="tags-container" *ngIf="img.tags?.length">
@@ -77,17 +75,16 @@
             </div>
 
             <div class="alt-text-section">
-              <!-- START MODIFICATION: Clarified label -->
               <label [for]="'alt-text-' + i">Generated Alt Text (Editable)</label>
-              <!-- END MODIFICATION -->
               <textarea [id]="'alt-text-' + i" class="alt-text-input" [(ngModel)]="img.userAltText"
                 [name]="'altText' + i" rows="3" placeholder="Enter alt text description">
               </textarea>
               <div class="alt-text-actions">
-                <button type="button" class="secondary" (click)="acceptSuggestedAltText(i)">
+                <button type="button" class="secondary" (click)="acceptSuggestedAltText(i)"
+                  [disabled]="img.userAltText === img.generated_alt_text">
                   Revert to Generated
                 </button>
-                <button type="button" class="secondary" (click)="clearAltText(i)">
+                <button type="button" class="secondary" (click)="clearAltText(i)" [disabled]="!img.userAltText">
                   Clear
                 </button>
               </div>
@@ -97,12 +94,22 @@
       </div>
     </div>
 
+    <!-- --- START MODIFICATION: Added Image Navigation Buttons --- -->
+    <div class="image-nav-buttons" *ngIf="images.length > 1">
+      <button *ngFor="let img of images; let i = index" type="button" class="nav-button"
+        [class.active]="i === activeIndex" (click)="setActive(i)" [attr.aria-label]="'Go to image ' + (i + 1)">
+        {{ i + 1 }}
+      </button>
+    </div>
+    <!-- --- END MODIFICATION --- -->
+
+
     <form (ngSubmit)="updateAltText()">
       <div class="action-buttons">
-        <button type="submit" class="primary" [disabled]="updating">
+        <button type="submit" class="primary" [disabled]="updating || processing">
           {{ updating ? 'Saving...' : 'Save All Alt Texts' }}
         </button>
-        <button type="button" class="secondary" (click)="downloadFile()" [disabled]="updating">
+        <button type="button" class="secondary" (click)="downloadFile()" [disabled]="updating || processing">
           Download Document
         </button>
       </div>
@@ -110,6 +117,7 @@
   </div>
 </div>
 
+<!-- Keep embedded styles for simplicity -->
 <style>
   :host {
     --primary-color: #0066cc;
@@ -128,7 +136,8 @@
     padding: 2rem;
   }
 
-  h1 {
+  h1,
+  h2 {
     margin-bottom: 2rem;
     color: var(--text-color);
   }
@@ -138,6 +147,16 @@
     display: flex;
     gap: 1rem;
     align-items: center;
+  }
+
+  input[type="file"] {
+    padding: 0.5rem;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    flex-grow: 1;
+    /* Allow input to grow */
+    max-width: 500px;
+    /* Limit input width */
   }
 
   .error-message {
@@ -159,54 +178,173 @@
     border: 1px solid var(--border-color);
     border-radius: 4px;
     background: var(--background-light);
+    display: flex;
+    /* Use flexbox */
+    align-items: center;
+    /* Align items vertically */
+    gap: 1rem;
+    /* Space between elements */
+  }
+
+  .status-step.active {
+    border-color: var(--primary-color);
+    /* Highlight active step */
   }
 
   .step-number {
-    display: inline-block;
-    width: 24px;
-    height: 24px;
-    line-height: 24px;
+    display: inline-flex;
+    /* Use flex for centering */
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    /* Slightly larger */
+    height: 28px;
+    line-height: 28px;
     text-align: center;
     background: var(--primary-color);
     color: white;
     border-radius: 50%;
     margin-right: 0.5rem;
+    flex-shrink: 0;
+    /* Prevent shrinking */
   }
 
   .step-label {
     font-weight: bold;
     color: var(--text-color);
+    flex-shrink: 0;
+    /* Prevent shrinking */
   }
 
   .progress-bar {
-    margin: 1rem 0;
+    /* --- START MODIFICATION: Make progress bar flexible --- */
+    flex-grow: 1;
+    /* Allow bar to take remaining space */
+    /* --- END MODIFICATION --- */
+    margin: 0;
+    /* Adjusted margin */
     background: var(--border-color);
     border-radius: 4px;
     overflow: hidden;
+    height: 10px;
+    /* Slightly thicker */
   }
 
   .progress {
-    height: 8px;
+    height: 100%;
     background: var(--primary-color);
     transition: width 0.3s ease;
   }
 
   .status-details {
-    margin-top: 0.5rem;
+    margin-left: auto;
+    /* Push details to the right */
     color: var(--text-muted);
+    font-size: 0.9em;
+    text-align: right;
+    flex-shrink: 0;
+    /* Prevent shrinking */
+  }
+
+  .status-details p {
+    margin: 0;
+    line-height: 1.3;
   }
 
   .results-container {
     margin-top: 2rem;
   }
 
-  .image-review {
-    margin-bottom: 2rem;
-    padding: 1.5rem;
-    border: 1px solid var(--border-color);
-    border-radius: 4px;
-    background: white;
+  /* --- START MODIFICATION: Updated Carousel Controls --- */
+  .carousel-controls {
+    display: flex;
+    justify-content: space-between;
+    /* Space out buttons and counter */
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1rem;
   }
+
+  .image-counter {
+    font-size: 0.9em;
+    color: var(--text-muted);
+  }
+
+  .nav-arrow-button {
+    padding: 0.4rem 0.8rem;
+    /* Adjust padding */
+    font-size: 1.2rem;
+    /* Make arrows slightly larger */
+    line-height: 1;
+  }
+
+  /* --- END MODIFICATION --- */
+
+
+  /* --- START MODIFICATION: Carousel and Card Styles --- */
+  .cards-viewport {
+    overflow-x: auto;
+    overflow-y: hidden;
+    white-space: nowrap;
+    /* Keep cards in a row */
+    padding: 1rem 0;
+    scroll-behavior: smooth;
+    /* Enable smooth scrolling */
+    /* Add scroll snapping */
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+    /* Momentum scrolling on iOS */
+    margin-bottom: 1rem;
+    /* Space before nav buttons */
+  }
+
+  .cards {
+    display: inline-flex;
+    /* Use inline-flex for proper spacing and alignment */
+    gap: 1.5rem;
+    /* Space between cards */
+    padding: 0 1rem;
+    /* Padding for start/end snapping */
+    min-width: 100%;
+    /* Ensure container stretches */
+  }
+
+  .card-wrapper {
+    flex: 0 0 calc(100% - 2rem);
+    /* Each card takes full viewport width minus padding */
+    max-width: 450px;
+    /* Max card width */
+    scroll-snap-align: center;
+    /* Snap cards to the center */
+    white-space: normal;
+    /* Allow text wrapping inside card */
+    box-sizing: border-box;
+  }
+
+  /* --- END MODIFICATION --- */
+
+  .image-card {
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 1.5rem;
+    /* Increased padding */
+    background: white;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+    height: 100%;
+    /* Ensure cards have consistent height for alignment */
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Keep active scaling subtle */
+  .image-card.active {
+    /* transform: scale(1.01); */
+    /* Optional subtle scale */
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    border-color: var(--primary-color);
+  }
+
 
   .image-header {
     margin-bottom: 1rem;
@@ -220,19 +358,70 @@
     font-size: 0.875rem;
   }
 
-  .image-container {
-    margin: 1rem 0;
+  .image-preview {
     text-align: center;
+    margin: 1rem 0;
+    /* Add margin */
+    flex-grow: 1;
+    /* Allow preview to take space */
+    display: flex;
+    /* Center image within */
+    align-items: center;
+    justify-content: center;
+    min-height: 200px;
+    /* Ensure a minimum height */
   }
 
-  .image-container img {
+  .image-preview img {
     max-width: 100%;
-    max-height: 400px;
+    max-height: 300px;
+    /* Limit image height */
     object-fit: contain;
+    border-radius: 4px;
+    background-color: #f0f0f0;
+    /* Light background for transparent images */
   }
+
+  .meta-row {
+    display: flex;
+    flex-direction: column;
+    /* Stack vertically */
+    gap: 0.75rem;
+    /* Space between items */
+    margin-top: 1rem;
+  }
+
+  .old-alt {
+    /* Takes full width now */
+  }
+
+  .old-alt label {
+    display: block;
+    font-weight: 500;
+    margin-bottom: 0.25rem;
+    color: var(--text-color);
+    font-size: 0.9em;
+  }
+
+  .old-alt-text {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    background-color: var(--background-light);
+    padding: 0.5rem;
+    border-radius: 4px;
+    border: 1px solid var(--border-color);
+    min-height: 40px;
+    /* Give it some height */
+    white-space: pre-wrap;
+    /* Preserve line breaks */
+    word-break: break-word;
+    /* Break long words */
+  }
+
 
   .tags-container {
-    margin: 1rem 0;
+    margin: 0;
+    /* Remove margin */
     display: flex;
     gap: 0.5rem;
     flex-wrap: wrap;
@@ -240,30 +429,104 @@
 
   .tag {
     padding: 0.25rem 0.75rem;
-    background: var(--background-light);
+    background: #e9ecef;
+    /* Slightly different background */
     border-radius: 16px;
-    font-size: 0.875rem;
-    color: var(--text-muted);
+    font-size: 0.8em;
+    /* Smaller tags */
+    color: var(--secondary-color);
+    border: 1px solid var(--border-color);
   }
 
   .alt-text-section {
-    margin-top: 1rem;
+    margin-top: 1.5rem;
+    /* More space */
+  }
+
+  .alt-text-section label {
+    display: block;
+    font-weight: 500;
+    margin-bottom: 0.5rem;
+    color: var(--text-color);
   }
 
   .alt-text-input {
     width: 100%;
-    margin: 0.5rem 0;
-    padding: 0.5rem;
+    margin: 0 0 0.5rem 0;
+    /* Margin below */
+    padding: 0.75rem;
+    /* More padding */
     border: 1px solid var(--border-color);
     border-radius: 4px;
     resize: vertical;
+    min-height: 80px;
+    font-size: 1rem;
+    line-height: 1.5;
+  }
+
+  .alt-text-input:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 2px rgba(0, 102, 204, 0.2);
   }
 
   .alt-text-actions {
     display: flex;
     gap: 0.5rem;
     margin-top: 0.5rem;
+    justify-content: flex-start;
+    /* Align buttons left */
   }
+
+  .alt-text-actions button {
+    font-size: 0.85em;
+    /* Smaller action buttons */
+    padding: 0.3rem 0.6rem;
+  }
+
+  /* --- START MODIFICATION: Styles for Image Navigation Buttons --- */
+  .image-nav-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    /* Allow buttons to wrap */
+    justify-content: center;
+    gap: 0.5rem;
+    margin-top: 1rem;
+    /* Space above buttons */
+    margin-bottom: 2rem;
+    /* Space below buttons */
+    padding: 0.5rem;
+    background-color: var(--background-light);
+    border-radius: 8px;
+  }
+
+  .nav-button {
+    padding: 0.4rem 0.8rem;
+    min-width: 36px;
+    /* Ensure minimum width */
+    text-align: center;
+    border: 1px solid var(--border-color);
+    background-color: white;
+    color: var(--secondary-color);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.2s, color 0.2s, border-color 0.2s;
+  }
+
+  .nav-button:hover:not(:disabled) {
+    background-color: #e9ecef;
+    border-color: #adb5bd;
+  }
+
+  .nav-button.active {
+    background-color: var(--primary-color);
+    color: white;
+    border-color: var(--primary-color);
+    font-weight: bold;
+  }
+
+  /* --- END MODIFICATION --- */
+
 
   .action-buttons {
     margin-top: 2rem;
@@ -273,12 +536,15 @@
   }
 
   button {
-    padding: 0.5rem 1rem;
+    padding: 0.6rem 1.2rem;
+    /* Slightly larger buttons */
     border: none;
     border-radius: 4px;
     cursor: pointer;
     font-weight: 500;
     transition: background-color 0.2s, opacity 0.2s;
+    font-size: 1rem;
+    /* Ensure consistent font size */
   }
 
   button:disabled {
@@ -293,6 +559,7 @@
 
   button.primary:hover:not(:disabled) {
     background: #0056b3;
+    /* Darker hover */
   }
 
   button.secondary {
@@ -303,6 +570,7 @@
 
   button.secondary:hover:not(:disabled) {
     background: #e9ecef;
+    /* Slightly darker hover */
   }
 
   @media (max-width: 600px) {
@@ -315,12 +583,44 @@
       align-items: stretch;
     }
 
+    .status-step {
+      flex-direction: column;
+      /* Stack status vertically on small screens */
+      align-items: flex-start;
+    }
+
+    .status-details {
+      margin-left: 0;
+      text-align: left;
+      margin-top: 0.5rem;
+    }
+
+    .card-wrapper {
+      flex: 0 0 calc(100% - 1rem);
+      /* Adjust for smaller padding */
+      max-width: none;
+      /* Allow full width */
+    }
+
+    .cards {
+      padding: 0 0.5rem;
+      gap: 1rem;
+    }
+
+    .image-nav-buttons {
+      justify-content: center;
+      /* Center buttons */
+    }
+
     .action-buttons {
       flex-direction: column;
     }
 
     .alt-text-actions {
-      flex-direction: column;
+      flex-direction: row;
+      /* Keep these side-by-side if space allows */
+      flex-wrap: wrap;
+      /* Allow wrapping */
     }
   }
 </style>

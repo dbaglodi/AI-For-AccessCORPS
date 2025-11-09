@@ -55,10 +55,16 @@ def startup_event():
 
 load_dotenv()
 
+# --- START MODIFICATION: Expose Content-Disposition Header ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
+    allow_origins=["*"], # In production, restrict this to your frontend's origin
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["Content-Disposition"] # Allow frontend to read this header
 )
+# --- END MODIFICATION ---
 
 processing_status = {}
 
@@ -143,8 +149,8 @@ def update_processing_status(file_id: str, step: str, progress: int, total: int)
         processing_status[file_id].update({"current_step": step, "total_images": new_total, "processed_images": progress,
                                            "progress": min(100, 30 + (60 * (progress / max(new_total, 1)))),
                                            "updated_at": datetime.now().isoformat()})
-        print(f"Status update: {step} - {progress}/{new_total} images processed")
-        # logging.info(f"Status update: {step} - {progress}/{new_total} images processed") # Reduce log noise
+        # Use logging instead of print for status updates if desired
+        # logging.info(f"Status update: {step} - {progress}/{new_total} images processed")
 
 
 @app.get("/status/{file_id}")
@@ -163,16 +169,23 @@ def get_images(file_id: str):
             partial_dir = os.path.join(PROCESSED_DIR, file_id); images_dir = os.path.join(partial_dir, "images")
             partial_images = []
             if os.path.exists(images_dir):
-                files = sorted(glob.glob(os.path.join(images_dir, "*.json")))
+                # Ensure correct sorting if filenames are like 0.json, 1.json, ... 10.json
+                files = sorted(glob.glob(os.path.join(images_dir, "*.json")), key=lambda x: int(os.path.basename(x).split('.')[0]))
                 for fpath in files:
                     try:
                         with open(fpath, "r", encoding="utf-8") as fh: partial_images.append(json.load(fh))
-                    except Exception: continue
+                    except Exception as e:
+                         logging.warning(f"Failed to load partial image data from {fpath}: {e}")
+                         continue
             return JSONResponse(content={"status": status["status"], "progress": status["progress"],
                                          "current_step": status["current_step"], "images": partial_images})
     json_path = os.path.join(PROCESSED_DIR, f"{file_id}.json")
-    if not os.path.exists(json_path): raise HTTPException(status_code=404, detail="File not found.")
-    with open(json_path, "r", encoding="utf-8") as f: results = json.load(f)
+    if not os.path.exists(json_path): raise HTTPException(status_code=404, detail="File processing data not found.")
+    try:
+        with open(json_path, "r", encoding="utf-8") as f: results = json.load(f)
+    except Exception as e:
+        logging.error(f"Failed to read processed data for {file_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to read processing results.")
     return JSONResponse(content={"status": "completed", "progress": 100, "current_step": "Processing complete",
                                  "images": results})
 
@@ -195,91 +208,186 @@ def rag_query(query: Dict[str, Any]):
 async def update_alt_text( file_id: str, data: Dict[str, Any] = Body(description="Updates to image alt texts") ):
     # (function remains the same)
     json_path = os.path.join(PROCESSED_DIR, f"{file_id}.json")
-    if not os.path.exists(json_path): raise HTTPException(status_code=404, detail="File not found")
-    with open(json_path, "r", encoding="utf-8") as f: results = json.load(f)
+    if not os.path.exists(json_path): raise HTTPException(status_code=404, detail="File processing data not found")
+    try:
+        with open(json_path, "r", encoding="utf-8") as f: results = json.load(f)
+    except Exception as e:
+        logging.error(f"Failed to read processed data for update {file_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to read processing results.")
+
     updates = data.get("updates", []); updated_count = 0
-    if len(updates) != len(results): logging.warning(f"Update/results count mismatch ({len(updates)} vs {len(results)}).")
+    if len(updates) != len(results):
+         logging.warning(f"Update/results count mismatch for {file_id} ({len(updates)} vs {len(results)}). Proceeding cautiously.")
+
     for i, update_data in enumerate(updates):
         if i < len(results):
-            if "alt_text" in update_data: results[i]["final_alt_text"] = update_data["alt_text"]; updated_count += 1
-            elif "final_alt_text" not in results[i]: results[i]["final_alt_text"] = results[i].get("generated_alt_text", "")
-    with open(json_path, "w", encoding="utf-8") as f: json.dump(results, f)
+            # Use the user-provided text if available, otherwise keep the generated one
+            final_text = update_data.get("alt_text") # Assuming frontend sends edited text in 'alt_text'
+            if final_text is not None: # Check if the key exists, even if the value is empty string
+                results[i]["final_alt_text"] = final_text
+                updated_count += 1
+            elif "final_alt_text" not in results[i]: # If user didn't edit AND it wasn't set before
+                results[i]["final_alt_text"] = results[i].get("generated_alt_text", "") # Default to generated
+
+    try:
+        with open(json_path, "w", encoding="utf-8") as f: json.dump(results, f)
+    except Exception as e:
+        logging.error(f"Failed to write updated data for {file_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save alt text updates.")
+
     return {"status": "success", "updated_count": updated_count}
 
 @app.get("/download/{file_id}")
 def download_file(file_id: str):
     """Applies final alt text and returns the remediated file."""
-    ext = None; orig_path = None; orig_filename = None
-    # Find original file
-    for f in os.listdir(UPLOAD_DIR):
-        if f.startswith(file_id):
-            ext = os.path.splitext(f)[1]; orig_path = os.path.join(UPLOAD_DIR, f)
-            orig_filename = processing_status.get(file_id, {}).get("filename", f"remediated_{file_id}{ext}")
-            break
-    if not ext or not orig_path: raise HTTPException(status_code=404, detail="Original uploaded file not found.")
+    ext = None; orig_path = None; orig_filename = "unknown_file"
+    # Find original file and original filename
+    try:
+        if file_id in processing_status and "filename" in processing_status[file_id]:
+            orig_filename = processing_status[file_id]["filename"]
+            potential_ext = os.path.splitext(orig_filename)[1].lower()
+            if potential_ext in [".docx", ".pptx"]:
+                ext = potential_ext
+                orig_path_check = UPLOAD_DIR / f"{file_id}{ext}"
+                if orig_path_check.exists():
+                    orig_path = orig_path_check
+                else: # Fallback to glob if status filename is wrong/file renamed
+                     logging.warning(f"Original file path from status not found ({orig_path_check}), trying glob.")
+                     found_files = list(UPLOAD_DIR.glob(f"{file_id}.*"))
+                     if found_files:
+                         orig_path = found_files[0]
+                         ext = orig_path.suffix.lower()
+                         logging.warning(f"Found original file via glob: {orig_path}")
+                     else:
+                          raise HTTPException(status_code=404, detail="Original uploaded file not found in upload directory.")
+            else:
+                 raise HTTPException(status_code=400, detail="Invalid extension in processing status.")
+        else: # Fallback to glob if file_id not in status or filename missing
+            logging.warning(f"File ID {file_id} not found in status or filename missing, trying glob.")
+            found_files = list(UPLOAD_DIR.glob(f"{file_id}.*"))
+            if found_files:
+                orig_path = found_files[0]
+                ext = orig_path.suffix.lower()
+                orig_filename = orig_path.name # Use actual found filename
+                logging.warning(f"Found original file via glob: {orig_path}")
+            else:
+                 raise HTTPException(status_code=404, detail="Original uploaded file not found.")
 
-    json_path = os.path.join(PROCESSED_DIR, f"{file_id}.json")
-    if not os.path.exists(json_path): raise HTTPException(status_code=404, detail="Alt text data not found.")
-    with open(json_path, "r", encoding="utf-8") as f: results = json.load(f)
-    if not results: raise HTTPException(status_code=404, detail="Alt text data is empty.")
+        if ext not in [".docx", ".pptx"]:
+             raise HTTPException(status_code=400, detail=f"Unsupported file type determined: {ext}")
 
-    out_path = os.path.join(REMEDIATED_DIR, f"remediated_{file_id}{ext}")
+    except Exception as e:
+        logging.error(f"Error finding original file for {file_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error finding original file: {e}")
+
+    json_path = PROCESSED_DIR / f"{file_id}.json"
+    if not json_path.exists():
+        raise HTTPException(status_code=404, detail="Alt text processing data not found.")
 
     try:
+        with open(json_path, "r", encoding="utf-8") as f: results = json.load(f)
+    except Exception as e:
+        logging.error(f"Error reading alt text data for {file_id}: {e}")
+        raise HTTPException(status_code=500, detail="Error reading alt text data.")
+
+    if not results:
+        logging.warning(f"Alt text data for {file_id} is empty.")
+        # Decide if you want to allow downloading the original or raise error
+        # return FileResponse(orig_path, filename=f"original_{orig_filename}")
+        raise HTTPException(status_code=404, detail="Alt text data is empty, cannot remediate.")
+
+    out_path = REMEDIATED_DIR / f"remediated_{file_id}{ext}"
+    safe_orig_filename = "".join(c for c in orig_filename if c.isalnum() or c in (' ', '.', '_')).rstrip()
+    download_filename = f"remediated_{safe_orig_filename}"
+
+    try:
+        logging.info(f"Applying alt text to {orig_path} -> {out_path}")
         if ext == ".docx":
-            doc = Document(orig_path); shapes_processed = 0
-            # --- START MODIFICATION: Iterate inline shapes for writing ---
+            doc = Document(orig_path); shapes_processed = 0; image_index_map = {}
+            # Build a map of relationship IDs to their index in the results
+            for idx, res in enumerate(results):
+                rId = res.get("rId") # Assuming rId was stored during extraction
+                if rId: image_index_map[rId] = idx
+
+            inline_shape_count = 0
             for shape in doc.part.inline_shapes:
                  if hasattr(shape, 'type') and shape.type == 3: # WD_INLINE_SHAPE.PICTURE
-                    if shapes_processed < len(results):
-                        final_alt_text = results[shapes_processed].get("final_alt_text", results[shapes_processed].get("generated_alt_text", ""))
-                        try:
-                            # Access the underlying CT_Inline element's docPr
-                            docPr = shape._inline.find(qn('wp:docPr'))
-                            if docPr is not None:
-                                docPr.set('descr', final_alt_text) # Set the 'descr' attribute
-                            else: # If docPr doesn't exist, need to create it (more complex)
-                                 logger.warning(f"Cannot set alt text: wp:docPr element not found for inline shape {shapes_processed+1}")
-                        except Exception as alt_e: logger.warning(f"Error setting docPr descr for inline shape {shapes_processed+1}: {alt_e}")
-                        shapes_processed += 1
-                    else: break # Stop if we run out of results
-            if shapes_processed != len(results): logger.warning(f"DOCX Write Mismatch: Found {shapes_processed} shapes, have {len(results)} results.")
-            # --- END MODIFICATION ---
+                    inline_shape_count += 1
+                    current_rId = None
+                    try: current_rId = shape._inline.graphic.graphicData.pic.blipFill.blip.embed
+                    except AttributeError: continue # Skip if structure is unexpected
+
+                    result_idx = image_index_map.get(current_rId) # Look up by rId if possible
+                    # Fallback to sequential index if rId mapping failed or wasn't stored
+                    if result_idx is None:
+                         if shapes_processed < len(results): result_idx = shapes_processed
+                         else:
+                              logging.warning(f"Could not find matching result for DOCX shape {inline_shape_count} (rId: {current_rId}). Skipping.")
+                              continue
+
+                    final_alt_text = results[result_idx].get("final_alt_text", results[result_idx].get("generated_alt_text", ""))
+                    try:
+                        docPr = shape._inline.xpath('.//wp:docPr')[0] # Use xpath to find docPr reliably
+                        docPr.set('descr', final_alt_text)
+                        logging.debug(f"Set alt text for DOCX shape {inline_shape_count} (rId: {current_rId}): '{final_alt_text[:30]}...'")
+                    except IndexError: logging.warning(f"Cannot set alt text: wp:docPr element not found via xpath for inline shape {inline_shape_count}")
+                    except Exception as alt_e: logging.warning(f"Error setting docPr descr for inline shape {inline_shape_count}: {alt_e}")
+                    shapes_processed += 1 # Increment only when alt text is attempted
+
+            if shapes_processed != len(results):
+                 logging.warning(f"DOCX Write Mismatch: Attempted to set alt text for {shapes_processed} shapes, but have {len(results)} results.")
             doc.save(out_path)
 
         elif ext == ".pptx":
             pres = Presentation(orig_path); shapes_processed = 0
-            for slide in pres.slides:
-                for shape in slide.shapes:
-                    # --- START MODIFICATION: Use XML access to SET alt text ---
+            for slide_idx, slide in enumerate(pres.slides):
+                for shape_idx, shape in enumerate(slide.shapes):
                     if isinstance(shape, PptxPicture):
                          if shapes_processed < len(results):
                             final_alt_text = results[shapes_processed].get("final_alt_text", results[shapes_processed].get("generated_alt_text", ""))
                             try:
-                                # Navigate the XML tree to find cNvPr and set 'descr'
-                                nvPr = getattr(getattr(getattr(shape, '_element', None), 'nvPicPr', None), 'cNvPr', None)
-                                if nvPr is not None:
-                                    nvPr.attrib['descr'] = final_alt_text # Set the attribute directly
-                                else:
-                                     logger.warning(f"Cannot set alt text: cNvPr element not found for picture shape {shapes_processed+1} on slide {slide.slide_id}")
-                            except Exception as alt_e:
-                                 logger.warning(f"Error setting descr attribute for picture shape {shapes_processed+1}: {alt_e}")
+                                nvPr = shape._element.nvPicPr.cNvPr # More direct access
+                                nvPr.set('descr', final_alt_text)
+                                logging.debug(f"Set alt text for PPTX shape {shapes_processed+1} on slide {slide_idx+1}: '{final_alt_text[:30]}...'")
+                            except AttributeError: logging.warning(f"Cannot set alt text: cNvPr element not found for picture shape {shapes_processed+1}")
+                            except Exception as alt_e: logger.warning(f"Error setting descr attribute for picture shape {shapes_processed+1}: {alt_e}")
                             shapes_processed += 1
-                         else: break # Stop if we run out of results
-                if shapes_processed >= len(results): break # Stop iterating slides if all images done
-            if shapes_processed != len(results): logger.warning(f"PPTX Write Mismatch: Found {shapes_processed} shapes, have {len(results)} results.")
-            # --- END MODIFICATION ---
+                         else: break # Stop inner loop
+                if shapes_processed >= len(results): break # Stop outer loop
+            if shapes_processed != len(results):
+                 logging.warning(f"PPTX Write Mismatch: Set alt text for {shapes_processed} shapes, but have {len(results)} results.")
             pres.save(out_path)
         else:
-            raise HTTPException(status_code=400, detail="Unsupported file type.")
+            raise HTTPException(status_code=400, detail="Internal error: Unsupported file type during download.")
 
     except Exception as e:
-         logger.error(f"Failed to remediate and save file {file_id}: {e}", exc_info=True)
-         raise HTTPException(status_code=500, detail=f"Failed to write remediated file: {e}")
+         logging.exception(f"Failed to remediate and save file {file_id}: {e}") # Log full traceback
+         raise HTTPException(status_code=500, detail=f"Failed to write remediated file: {str(e)}")
 
-    if not os.path.exists(out_path) or os.path.getsize(out_path) == 0:
-        logger.error(f"Failed to save file or file is 0 bytes: {out_path}")
+    if not out_path.exists() or out_path.stat().st_size == 0:
+        logging.error(f"Failed to save file or file is 0 bytes: {out_path}")
+        # Consider returning the original file as a fallback?
+        # return FileResponse(orig_path, filename=f"original_{orig_filename}", headers={"Content-Disposition": f"attachment; filename*=UTF-8''original_{orig_filename}"})
         raise HTTPException(status_code=500, detail="Failed to save remediated file (0 bytes).")
 
-    return FileResponse(out_path, filename=f"remediated_{orig_filename}")
+    logging.info(f"Successfully remediated {file_id}, serving {out_path} as {download_filename}")
+    return FileResponse(
+        out_path,
+        filename=download_filename,
+        # Ensure Content-Disposition is set correctly for FileResponse
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{download_filename}"}
+    )
 
+
+if __name__ == "__main__":
+    import uvicorn
+    # --- START MODIFICATION: Ensure necessary directories exist before starting ---
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    REMEDIATED_DIR.mkdir(parents=True, exist_ok=True)
+    CUSTOM_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    # --- END MODIFICATION ---
+
+    logging.basicConfig(level=logging.INFO)
+    logging.info(f"Starting server... Uploads: {UPLOAD_DIR}, Processed: {PROCESSED_DIR}, Remediated: {REMEDIATED_DIR}, Cache: {CUSTOM_CACHE_DIR}")
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
