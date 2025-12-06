@@ -66,12 +66,21 @@
             </div>
 
             <div class="meta-row">
+              <!-- --- START MODIFICATION: Remove Short Description Display --- -->
+              <!--
+              <div class="old-alt"><label>AI Short Description:</label>
+                <div class="old-alt-text">{{ img.short_description || '—' }}</div>
+              </div>
+              -->
+              <!-- --- END MODIFICATION --- -->
               <div class="old-alt"><label>Original Alt Text:</label>
                 <div class="old-alt-text">{{ img.alt_text || '—' }}</div>
               </div>
-              <div class="tags-container" *ngIf="img.tags?.length">
-                <span class="tag" *ngFor="let tag of img.tags">{{ tag }}</span>
+              <!-- --- START MODIFICATION: Fix tags ngIf/ngFor --- -->
+              <div class="tags-container" *ngIf="img.classification?.length">
+                <span class="tag" *ngFor="let tag of img.classification">{{ tag }}</span>
               </div>
+              <!-- --- END MODIFICATION --- -->
             </div>
 
             <div class="alt-text-section">
@@ -83,6 +92,10 @@
                 <button type="button" class="secondary" (click)="acceptSuggestedAltText(i)"
                   [disabled]="img.userAltText === img.generated_alt_text">
                   Revert to Generated
+                </button>
+                <button type="button" class="secondary" (click)="revertToOriginalAltText(i)"
+                  [disabled]="img.userAltText === (img.alt_text || '')">
+                  Revert to Original
                 </button>
                 <button type="button" class="secondary" (click)="clearAltText(i)" [disabled]="!img.userAltText">
                   Clear
@@ -284,7 +297,10 @@
   /* --- START MODIFICATION: Carousel and Card Styles --- */
   .cards-viewport {
     overflow-x: auto;
-    overflow-y: hidden;
+    /* --- START MODIFICATION: Fix vertical scrolling issue --- */
+    overflow-y: visible;
+    /* Was 'hidden', this was clipping the cards */
+    /* --- END MODIFICATION --- */
     white-space: nowrap;
     /* Keep cards in a row */
     padding: 1rem 0;
@@ -335,6 +351,10 @@
     /* Ensure cards have consistent height for alignment */
     display: flex;
     flex-direction: column;
+    /* --- START MODIFICATION: Add max-height and overflow-y --- */
+    max-height: 75vh;
+    overflow-y: auto;
+    /* --- END MODIFICATION --- */
   }
 
   /* Keep active scaling subtle */

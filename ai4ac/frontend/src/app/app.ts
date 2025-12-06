@@ -1,9 +1,9 @@
-import { Component, OnDestroy } from '@angular/core'; // Import OnDestroy
-import { HttpClient, HttpEventType, HttpResponse, HttpErrorResponse } from '@angular/common/http'; // Import HttpResponse, HttpErrorResponse
+import { Component, OnDestroy, ElementRef, ViewChild, AfterViewInit, ChangeDetectorRef } from '@angular/core'; // Import ElementRef, ViewChild, AfterViewInit, ChangeDetectorRef
+import { HttpClient, HttpEventType, HttpResponse, HttpErrorResponse } from '@angular/common/http';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { interval, Subscription } from 'rxjs'; // Import interval and Subscription
-import { switchMap, takeWhile } from 'rxjs/operators'; // Import operators
+import { interval, Subscription } from 'rxjs';
+import { switchMap, takeWhile } from 'rxjs/operators';
 
 
 @Component({
@@ -13,41 +13,57 @@ import { switchMap, takeWhile } from 'rxjs/operators'; // Import operators
   templateUrl: './app.html',
   styleUrls: ['./app.scss']
 })
-export class AppComponent implements OnDestroy { // Implement OnDestroy
+// --- START MODIFICATION: Add AfterViewInit ---
+export class AppComponent implements OnDestroy, AfterViewInit {
+// --- END MODIFICATION ---
   selectedFile: File | null = null;
-  uploadProgress: number = 0;
+  // --- START MODIFICATION: Remove uploadProgress ---
+  // uploadProgress: number = 0; // Removed
+  // --- END MODIFICATION ---
   fileId: string | null = null;
   images: any[] = [];
-  // index of the active/centered card in the carousel
   activeIndex: number = 0;
   loadingImages = false;
   error: string | null = null;
   updating = false;
   processing = false;
   processingStatus: any = null;
-  // --- START MODIFICATION: Use RxJS interval for polling ---
   statusCheckSubscription: Subscription | null = null;
+
+  // --- START MODIFICATION: Add ViewChild for carousel scrolling ---
+  @ViewChild('cardsViewport') cardsViewportRef!: ElementRef<HTMLDivElement>;
+  @ViewChild('cardsContainer') cardsContainerRef!: ElementRef<HTMLDivElement>;
   // --- END MODIFICATION ---
 
-  constructor(private http: HttpClient) { }
+  // --- START MODIFICATION: Inject ChangeDetectorRef ---
+  constructor(private http: HttpClient, private cdr: ChangeDetectorRef) { }
+  // --- END MODIFICATION ---
 
   ngOnDestroy() {
-    // --- START MODIFICATION: Unsubscribe on component destruction ---
     if (this.statusCheckSubscription) {
       this.statusCheckSubscription.unsubscribe();
     }
-    // --- END MODIFICATION ---
   }
+
+  // --- START MODIFICATION: Implement AfterViewInit for potential initial scroll ---
+  ngAfterViewInit() {
+    // If images are loaded initially (e.g., from state), ensure scroll position is correct
+    if (this.images.length > 0) {
+      this.scrollToActiveIndex();
+    }
+  }
+  // --- END MODIFICATION ---
 
 
   onFileSelected(event: any) {
     this.selectedFile = event.target.files[0] || null;
-    // Reset state when a new file is selected
     this.resetState();
   }
 
   resetState() {
-      this.uploadProgress = 0;
+      // --- START MODIFICATION: Remove uploadProgress ---
+      // this.uploadProgress = 0; // Removed
+      // --- END MODIFICATION ---
       this.fileId = null;
       this.images = [];
       this.activeIndex = 0;
@@ -64,55 +80,55 @@ export class AppComponent implements OnDestroy { // Implement OnDestroy
 
   uploadFile() {
     if (!this.selectedFile) return;
-    // Reset state before starting upload
     this.resetState();
 
     const formData = new FormData();
     formData.append('file', this.selectedFile);
-    this.processing = true; // Show processing indicator early
+    this.processing = true;
+    // --- START MODIFICATION: Set initial processing status differently ---
+    this.processingStatus = { current_step: 'Uploading file...' }; // Simpler initial status
+    // --- END MODIFICATION ---
 
     this.http.post<any>('http://localhost:8000/upload', formData, {
       reportProgress: true,
       observe: 'events'
     }).subscribe({
       next: event => {
-        if (event.type === HttpEventType.UploadProgress && event.total) {
-          this.uploadProgress = Math.round(100 * event.loaded / event.total);
-          this.processingStatus = { current_step: 'Uploading...', progress: this.uploadProgress }; // Update status during upload
-        } else if (event.type === HttpEventType.Response) {
+        // --- START MODIFICATION: Remove uploadProgress handling ---
+        // if (event.type === HttpEventType.UploadProgress && event.total) {
+        //   // this.uploadProgress = Math.round(100 * event.loaded / event.total); // Removed
+        //   // Update status minimally during upload if needed, but remove progress bar value
+        //   this.processingStatus = { current_step: 'Uploading...', progress: undefined };
+        // } else
+        // --- END MODIFICATION ---
+        if (event.type === HttpEventType.Response) {
           this.fileId = event.body.file_id;
           console.log(`Upload complete. File ID: ${this.fileId}. Starting status check.`);
-          // --- START MODIFICATION: Use RxJS interval for polling ---
           this.startStatusCheck();
-          // --- END MODIFICATION ---
         }
       },
-      error: (err: HttpErrorResponse) => { // Type the error
-        console.error('Upload failed:', err); // Log the full error
+      error: (err: HttpErrorResponse) => {
+        console.error('Upload failed:', err);
         this.error = `Upload failed: ${err.message || 'Server error'}`;
         this.processing = false;
-        this.resetState(); // Reset fully on upload failure
+        this.resetState();
       }
     });
   }
 
-  // --- START MODIFICATION: Use RxJS interval for polling ---
   startStatusCheck() {
     if (this.statusCheckSubscription) {
-      this.statusCheckSubscription.unsubscribe(); // Ensure previous one is stopped
+      this.statusCheckSubscription.unsubscribe();
     }
     if (!this.fileId) return;
 
-    this.statusCheckSubscription = interval(2000) // Poll every 2 seconds
+    this.statusCheckSubscription = interval(2000)
       .pipe(
         switchMap(() => this.http.get<any>(`http://localhost:8000/status/${this.fileId}`)),
-        // Optional: Add takeWhile if you want to automatically stop after completion/error,
-        // but explicit stopping is safer.
-        // takeWhile(status => status.status === 'processing' || status.status === 'uploading', true)
       )
       .subscribe({
         next: status => {
-          console.log("Status update:", status); // Log status updates
+          console.log("Status update:", status);
           this.processingStatus = status;
           this.processing = (status.status === 'processing' || status.status === 'uploading');
 
@@ -120,20 +136,19 @@ export class AppComponent implements OnDestroy { // Implement OnDestroy
             console.log('Processing completed. Stopping status check and fetching final images.');
             this.stopStatusCheck();
             this.processing = false;
-            this.fetchImages(true); // Fetch final images
+            this.fetchImages(true);
           } else if (status.status === 'error') {
             console.error('Processing error reported by status endpoint:', status.error);
             this.error = `Processing failed: ${status.error}`;
             this.stopStatusCheck();
             this.processing = false;
           } else {
-            // Still processing: Fetch partial images incrementally
             console.log('Still processing, fetching partial images...');
-            this.fetchImages(false); // Fetch partial/current images
+            this.fetchImages(false);
           }
         },
-        error: (err: HttpErrorResponse) => { // Type the error
-          console.error('Failed to check processing status:', err); // Log the full error
+        error: (err: HttpErrorResponse) => {
+          console.error('Failed to check processing status:', err);
           this.error = `Status check failed: ${err.message || 'Server error'}`;
           this.stopStatusCheck();
           this.processing = false;
@@ -148,101 +163,106 @@ export class AppComponent implements OnDestroy { // Implement OnDestroy
       console.log("Status check stopped.");
     }
   }
+
+  // --- START MODIFICATION: Helper to map image data ---
+  private mapImageData(img: any, index: number): any {
+    return {
+      ...img,
+      userAltText: img.generated_alt_text || img.alt_text || '',
+      // short_description: img.short_description || 'N/A', // Removed
+      // Ensure classification is always an array
+      classification: Array.isArray(img.classification) ? img.classification : [],
+      originalIndex: index
+    };
+  }
   // --- END MODIFICATION ---
 
-
-  // --- START MODIFICATION: Add 'isFinalFetch' parameter ---
   fetchImages(isFinalFetch: boolean) {
-  // --- END MODIFICATION ---
     if (!this.fileId) return;
-    // Only show loading indicator on the final fetch after completion
     this.loadingImages = isFinalFetch;
 
     this.http.get<any>(`http://localhost:8000/images/${this.fileId}`).subscribe({
       next: res => {
-        console.log('Fetch images response:', res); // Debug logging
+        console.log('Fetch images response:', res);
 
         if (res.status === 'completed') {
-          // --- START MODIFICATION: Handle final state ---
-          this.images = (res.images || []).map((img: any, idx: number) => ({
-            ...img,
-            userAltText: img.generated_alt_text || img.alt_text || '', // Use generated first, then original
-            originalIndex: idx // Keep track if needed, maybe image_idx is better
-          }));
-          // Sort images based on slide_num and then image_idx if available
-          this.images.sort((a, b) => {
-              if (a.slide_num !== b.slide_num && a.slide_num != null && b.slide_num != null) {
-                  return a.slide_num - b.slide_num;
-              }
-              return (a.image_idx || a.originalIndex) - (b.image_idx || b.originalIndex);
-          });
-
-          this.activeIndex = this.images.length > 0 ? 0 : 0; // Go to first image on completion
-          this.processing = false; // Ensure processing is false
-          this.loadingImages = false;
-          this.stopStatusCheck(); // Ensure polling stops
+          // --- START MODIFICATION: Use helper for mapping ---
+          const newImages = (res.images || []).map((img: any, idx: number) => this.mapImageData(img, idx));
           // --- END MODIFICATION ---
+          this.images = this.sortImages(newImages); // Sort final list
+
+          this.activeIndex = this.images.length > 0 ? 0 : 0;
+          this.processing = false;
+          this.loadingImages = false;
+          this.stopStatusCheck();
+          this.cdr.detectChanges(); // Trigger change detection
+          this.scrollToActiveIndex(); // Scroll after view updates
         } else if (res.status === 'processing' || res.status === 'uploading') {
-           // --- START MODIFICATION: Handle partial update ---
-           this.processing = true; // Ensure processing is true
+           this.processing = true;
            if (Array.isArray(res.images)) {
                this.appendNewImages(res.images);
-               // Maybe set active index to the latest image?
-               // if (this.images.length > 0) {
-               //     this.setActive(this.images.length - 1);
-               // }
            }
-           // Ensure polling continues if it somehow stopped
            if (!this.statusCheckSubscription && !isFinalFetch) {
                console.warn("Polling was stopped but status is not complete. Restarting poll.");
                this.startStatusCheck();
            }
-           this.loadingImages = false; // Don't show loading during partial fetches
-           // --- END MODIFICATION ---
+           this.loadingImages = false;
         } else {
-             // Handle unexpected status?
              console.warn("Unexpected status from /images endpoint:", res.status);
              this.loadingImages = false;
         }
       },
-      error: (err: HttpErrorResponse) => { // Type the error
-        console.error('Failed to fetch images:', err); // Log the full error
+      error: (err: HttpErrorResponse) => {
+        console.error('Failed to fetch images:', err);
         this.error = `Failed to fetch images: ${err.message || 'Server error'}`;
         this.loadingImages = false;
-        // Don't stop processing indicator here if status polling might fix it
       }
     });
   }
+
+  sortImages(imageList: any[]): any[] {
+     return imageList.sort((a, b) => {
+        if (a.slide_num !== b.slide_num && a.slide_num != null && b.slide_num != null) {
+            return a.slide_num - b.slide_num;
+        }
+        // Use image_idx primarily, fall back to originalIndex
+        const idxA = a.image_idx ?? a.originalIndex ?? Infinity;
+        const idxB = b.image_idx ?? b.originalIndex ?? Infinity;
+        return idxA - idxB;
+     });
+  }
+
 
   appendNewImages(receivedImages: any[]) {
     if (!receivedImages || receivedImages.length === 0) return;
 
     let newImagesAdded = false;
-    const existingIds = new Set(this.images.map(img => img.image_idx)); // Use image_idx if available
+    const existingIds = new Set(this.images.map(img => img.image_idx).filter(id => id != null));
 
     for (const newImg of receivedImages) {
-      if (!existingIds.has(newImg.image_idx)) {
-        this.images.push({
-          ...newImg,
-          userAltText: newImg.generated_alt_text || newImg.alt_text || '',
-          originalIndex: this.images.length // Fallback index if image_idx is missing
-        });
-        existingIds.add(newImg.image_idx);
+      // Use image_idx if available, otherwise assume it's new if not deeply equal to an existing one
+      const isNew = newImg.image_idx != null
+        ? !existingIds.has(newImg.image_idx)
+        : !this.images.some(existingImg => JSON.stringify(existingImg) === JSON.stringify(newImg)); // Less efficient fallback
+
+      if (isNew) {
+        // --- START MODIFICATION: Use helper for mapping ---
+        this.images.push(this.mapImageData(newImg, this.images.length));
+        // --- END MODIFICATION ---
+
+        if (newImg.image_idx != null) {
+          existingIds.add(newImg.image_idx);
+        }
         newImagesAdded = true;
       }
     }
 
     if (newImagesAdded) {
-      // Re-sort images after adding new ones
-      this.images.sort((a, b) => {
-          if (a.slide_num !== b.slide_num && a.slide_num != null && b.slide_num != null) {
-              return a.slide_num - b.slide_num;
-          }
-          return (a.image_idx || a.originalIndex) - (b.image_idx || b.originalIndex);
-      });
-      console.log(`Appended images. Total now: ${this.images.length}`);
-      // Optionally move to the latest added image (could be jumpy)
-      // this.setActive(this.images.length - 1);
+      this.images = this.sortImages(this.images); // Re-sort after adding
+      console.log(`Appended/Sorted images. Total now: ${this.images.length}`);
+      // Don't auto-scroll here, let the status loop handle final scroll
+      // Force update the view if necessary
+      this.cdr.detectChanges();
     }
   }
 
@@ -250,11 +270,10 @@ export class AppComponent implements OnDestroy { // Implement OnDestroy
   updateAltText() {
     if (!this.fileId || this.images.length === 0) return;
     this.updating = true;
-    this.error = null; // Clear previous errors
+    this.error = null;
 
-    // Ensure the updates array matches the current order of this.images
     const updates = this.images.map(img => ({
-        image_idx: img.image_idx, // Include image_idx for potential server-side matching
+        image_idx: img.image_idx,
         alt_text: img.userAltText
     }));
 
@@ -262,58 +281,76 @@ export class AppComponent implements OnDestroy { // Implement OnDestroy
       next: res => {
         console.log('Alt text update successful:', res);
         this.updating = false;
-        // Optionally provide user feedback like a temporary success message instead of alert
-        // this.showSuccessMessage('Alt text saved!');
       },
-      error: (err: HttpErrorResponse) => { // Type the error
-        console.error('Failed to update alt text:', err); // Log the full error
+      error: (err: HttpErrorResponse) => {
+        console.error('Failed to update alt text:', err);
         this.error = `Failed to save alt text: ${err.message || 'Server error'}`;
         this.updating = false;
       }
     });
   }
 
-  // Carousel helpers
+  // --- START MODIFICATION: Updated setActive and scrolling ---
   setActive(i: number) {
-    const newIndex = Math.max(0, Math.min(this.images.length - 1, i));
+    if (this.images.length === 0) return;
+    // Handle wrapping
+    const newIndex = (i + this.images.length) % this.images.length;
+
     if (this.activeIndex !== newIndex) {
         this.activeIndex = newIndex;
-        // Use timeout to ensure element exists after potential *ngFor update
-        setTimeout(() => {
-            const el = document.getElementById('image-card-' + this.activeIndex);
-            if (el) {
-                // Use scrollIntoView with options for smoother scrolling
-                el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
-            } else {
-                console.warn(`Element image-card-${this.activeIndex} not found for scrolling.`);
-            }
-        }, 50); // Small delay
+        this.scrollToActiveIndex();
     }
-}
+  }
 
+  scrollToActiveIndex() {
+      // Use timeout to allow Angular to update the view *before* scrolling
+      setTimeout(() => {
+          if (this.cardsViewportRef && this.cardsContainerRef) {
+              const viewport = this.cardsViewportRef.nativeElement;
+              const container = this.cardsContainerRef.nativeElement;
+              const cardElements = container.children;
+              if (cardElements.length > this.activeIndex) {
+                  const activeCard = cardElements[this.activeIndex] as HTMLElement;
+                  const scrollLeft = activeCard.offsetLeft - viewport.offsetLeft; // Calculate scroll position based on card offset
 
+                  viewport.scrollTo({
+                      left: scrollLeft,
+                      behavior: 'smooth'
+                  });
+                  console.log(`Scrolled to index ${this.activeIndex} at position ${scrollLeft}`);
+              } else {
+                   console.warn(`Card element for index ${this.activeIndex} not found.`);
+              }
+          } else {
+               console.warn("Viewport or container ref not available for scrolling.");
+          }
+      }, 50); // Small delay might be needed
+  }
+  // --- END MODIFICATION ---
+
+  // --- START MODIFICATION: Update prev/next for wrapping ---
   prev() {
-    this.setActive(this.activeIndex - 1);
+    this.setActive(this.activeIndex - 1); // setActive handles wrapping
   }
 
   next() {
-    this.setActive(this.activeIndex + 1);
+    this.setActive(this.activeIndex + 1); // setActive handles wrapping
   }
+  // --- END MODIFICATION ---
 
   downloadFile() {
     if (!this.fileId) return;
-    this.error = null; // Clear previous errors
+    this.error = null;
 
-    console.log(`Attempting to download file for ID: ${this.fileId}`); // Log download attempt
+    console.log(`Attempting to download file for ID: ${this.fileId}`);
 
     this.http.get(`http://localhost:8000/download/${this.fileId}`, {
       responseType: 'blob',
-      observe: 'response' // Observe the full response to get headers
+      observe: 'response'
     }).subscribe({
-        // --- START MODIFICATION: Use HttpResponse<Blob> and check body ---
         next: (response: HttpResponse<Blob>) => {
             const blob = response.body;
-            console.log('Download response received. Status:', response.status); // Log status
+            console.log('Download response received. Status:', response.status);
 
             if (!blob || blob.size === 0) {
               console.error('Download failed: Empty or null blob received.');
@@ -321,52 +358,52 @@ export class AppComponent implements OnDestroy { // Implement OnDestroy
               return;
             }
 
-            // Try to get filename from Content-Disposition header
             const contentDisposition = response.headers.get('content-disposition');
-            let filename = `remediated_${this.fileId}.file`; // More specific default
-            console.log('Content-Disposition header:', contentDisposition); // Log header
+            let filename = `remediated_${this.fileId}.file`;
+            console.log('Content-Disposition header:', contentDisposition);
 
             if (contentDisposition) {
-              // Updated regex to handle filename*=UTF-8'' format and simple filename=
               const filenameRegex = /filename\*?=(?:(?:UTF-8|utf-8)''|["']?)([^;"]+)["']?/;
               const matches = filenameRegex.exec(contentDisposition);
               if (matches != null && matches[1]) {
                 try {
-                  // Decode URI component for potential UTF-8 encoding
                   filename = decodeURIComponent(matches[1]);
                 } catch (e) {
                   console.warn("Could not decode filename, using raw value:", matches[1]);
-                  filename = matches[1]; // Use raw value if decoding fails
+                  filename = matches[1];
                 }
               }
             }
-            console.log('Using filename:', filename); // Log final filename
+            console.log('Using filename:', filename);
 
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = filename; // Use the extracted or default filename
-            document.body.appendChild(a); // Append anchor to body for Firefox compatibility
+            a.download = filename;
+            document.body.appendChild(a);
             a.click();
             window.URL.revokeObjectURL(url);
-            document.body.removeChild(a); // Clean up anchor
-            console.log('Download triggered for:', filename); // Log success
+            document.body.removeChild(a);
+            console.log('Download triggered for:', filename);
         },
-        // --- END MODIFICATION ---
-        // --- START MODIFICATION: Log specific error ---
-        error: (err: HttpErrorResponse) => { // Explicitly type the error
+        error: (err: HttpErrorResponse) => {
           this.error = `Download failed: ${err.status} ${err.statusText || 'Unknown error'}`;
-          console.error('Download error:', err); // Log the full error object
+          console.error('Download error:', err);
         }
-        // --- END MODIFICATION ---
     });
   }
 
 
   acceptSuggestedAltText(index: number) {
     if (index >= 0 && index < this.images.length) {
-      // Revert to the AI-generated alt text, falling back to original if generated is empty
       this.images[index].userAltText = this.images[index].generated_alt_text || this.images[index].alt_text || '';
+    }
+  }
+
+  revertToOriginalAltText(index: number) {
+    if (index >= 0 && index < this.images.length) {
+      // Revert to the original alt text
+      this.images[index].userAltText = this.images[index].alt_text || '';
     }
   }
 

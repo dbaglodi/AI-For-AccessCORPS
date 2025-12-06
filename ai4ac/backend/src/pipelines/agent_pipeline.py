@@ -104,17 +104,26 @@ _primary_model_lock = threading.Lock()
 _results_lock = threading.Lock()
 logger = logging.getLogger(__name__)
 
+# --- START MODIFICATION: Add placeholder image ---
+UNSUPPORTED_IMAGE_PLACEHOLDER = "https://placehold.co/400x300/EFEFEF/AAAAAA?text=Unsupported+Format%5Cn(WMF/EMF)"
+# --- END MODIFICATION ---
+
 def preprocess_image(image_bytes, max_size=512):
     # (remains the same)
     try:
         image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
         image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
         img_byte_arr = io.BytesIO()
-        image.save(img_byte_arr, format='JPEG', quality=90)
+        img_byte_arr.save(img_byte_arr, format='JPEG', quality=90)
         return img_byte_arr.getvalue()
     except Exception as e:
+        # --- START MODIFICATION: Check for WMF/unidentified image errors ---
+        if "cannot identify image file" in str(e) or "unsupported image type" in str(e):
+             logger.warning(f"PIL cannot identify image file, likely an unsupported format (e.g., WMF/EMF). Error: {e}")
+             raise ValueError("Unsupported image format") # Raise specific error
+        # --- END MODIFICATION ---
         logger.error(f"Error preprocessing image: {e}")
-        return image_bytes
+        return image_bytes # Return original bytes on other errors
 
 def limit_chunks(texts, max_chunks=MAX_CHUNKS):
     # (remains the same)
@@ -187,47 +196,131 @@ def retrieve_rag_context(text_rag_instance, query, k=2):
     if not text_rag_instance: return ""
     try:
         results = text_rag_instance.search(query, top_k=k)
-        return "\n".join([r['text'] for r in results])
+        # --- START MODIFICATION: Fix IndentationError ---
+        return "".join([r['text'] for r in results])
     except Exception as e:
+        # --- END MODIFICATION ---
         logger.warning(f"Text retrieval failed: {e}")
         return ""
 
-# --- Prompt function using simplified structure for PaliGemma ---
-def create_alt_text_prompt(
-    structured_context: Dict[str, Optional[str]],
-    existing_alt: str,
-    model_format="paligemma"
-) -> str:
-    """Creates a prompt tailored to the specified model format."""
-    prompt_parts = []
+# --- START MODIFICATION: Reworked two-pass prompts ---
+
+def _get_combined_context(structured_context: Dict[str, Optional[str]]) -> str:
+    """Helper to create a combined context string."""
     context_lines = []
     if structured_context.get("doc_title"):
         context_lines.append(f"Document Title: {structured_context['doc_title']}")
     if structured_context.get("slide_title"):
         context_lines.append(f"Slide Title/Header: {structured_context['slide_title']}")
     if structured_context.get("surrounding_text"):
+        # Limit surrounding text in prompt
         context_lines.append(f"Surrounding Text: {structured_context['surrounding_text'][:300]}")
-    combined_context = ". ".join(filter(None, context_lines)) if context_lines else "No text context provided."
+    return ". ".join(filter(None, context_lines)) if context_lines else "No text context provided."
+
+def create_tagging_prompt(
+    structured_context: Dict[str, Optional[str]],
+    model_format="paligemma"
+) -> str:
+    """Creates a Pass 1 prompt to get image categories/tags."""
+    combined_context = _get_combined_context(structured_context)
+    prompt_parts = []
+    
+    # --- START MODIFICATION: Restore notebook prompt with stricter output instructions ---
+    categories_prompt_text = """Categories:
+Graph: Visual representations of data, typically with axes and labeled points, such as line graphs, bar graphs, and scatter plots. They display numerical data trends over time or across categories.
+Chart: Broad category that includes pie charts, flow charts, and similar visuals. Charts are used to show relationships, hierarchies, or proportions among different components or processes.
+Map: Geographical representations showing locations, terrain, or routes. Maps can include details like topography, political boundaries, or population density.
+Diagram: Illustrative visualizations explaining concepts, structures, or processes, such as circuit diagrams, organizational charts, or flow diagrams. Diagrams often break down complex ideas.
+Table: Gridded arrangements of data in rows and columns, often with headings. Tables are used for easy lookup and comparison of related information.
+Photograph: Real-life images that capture a scene, object, or event, often used for documentation or visual reference.
+Text: Visual representations of written information, often without additional visual elements. Text images are used to convey information directly in written form rather than through data or graphical representations.
+Screenshot: Captured images from a digital interface, such as a website, software, or application screen, usually to illustrate a particular function or feature.
+Equation: Visuals showing mathematical or scientific equations, formulas, or expressions.
+Other: An image that does not serve any of the above purposes.
+
+CRITICAL: Review the categories and their descriptions, then respond ONLY with the comma-separated names of the categories that apply to the image.
+Example Response: Graph, Diagram
+"""
+    # --- END MODIFICATION ---
 
     if model_format == "paligemma":
         prompt_parts.append("<image>\n")
-        prompt_parts.append(f"Context: {combined_context}. ")
-        prompt_parts.append("Describe the image concisely for alt text (max 120 chars), focusing on its purpose/meaning in context. For charts/matrices, describe type/topic/trend, not labels/values.\n")
-        prompt_parts.append("Alt Text:")
+        # --- START MODIFICATION: Revert to notebook-like prompt structure ---
+        prompt_parts.append(f"Using the image provided, classify it into the following categories based on its primary content and purpose.\n\n")
+        prompt_parts.append(f"Context: {combined_context}\n\n")
+        prompt_parts.append(f"{categories_prompt_text}\n\n")
+        # --- END MODIFICATION ---
+        prompt_parts.append("Selected Categories:")
     elif model_format == "smolvlm":
-         # QnA style for SmolVLM
-         if existing_alt: combined_context += f". Existing Alt Text (Ignore if poor): {existing_alt}"
-         question = (
-            "Write a concise alt text (max 120 chars) describing the image's key information and purpose in this context. "
-            "Avoid starting with 'Image of'. "
-            "For charts/matrices/diagrams, describe the type, topic, and key trend/conclusion - DO NOT list labels or data values shown. "
-            "If decorative, say 'Decorative image'."
-         )
          prompt_parts.append("<image>\n")
-         prompt_parts.append(f"Context: {combined_context}\n")
-         prompt_parts.append(f"Question: {question}\n")
+         # --- START MODIFICATION: Revert to notebook-like prompt structure ---
+         prompt_parts.append(f"Question: Using the image provided, classify it into the following categories based on its primary content and purpose.\n\n")
+         prompt_parts.append(f"Context: {combined_context}\n\n")
+         prompt_parts.append(f"{categories_prompt_text}\n\n")
+         # --- END MODIFICATION ---
          prompt_parts.append("Answer:")
     return "".join(prompt_parts)
+
+# --- START MODIFICATION: Updated alt text prompt to match notebook and add specific "ba/ga" instruction ---
+def create_alt_text_prompt(
+    structured_context: Dict[str, Optional[str]],
+    categories: List[str], # <-- Takes tags as input
+    existing_alt: str,
+    model_format="paligemma"
+) -> str:
+    """Creates a Pass 2 prompt using the tags to get the full alt text."""
+    combined_context = _get_combined_context(structured_context)
+    prompt_parts = []
+    category_str = ", ".join(categories)
+
+    guidelines = [
+        "1. Focus on describing key visual elements and their relationship to the context.",
+        "2. Use clear, academic language.",
+        "3. If the image shows a diagram, graph, chart, or table, describe its key components, purpose, and key takeaway. CRITICAL: DO NOT read the text labels, values, or equations aloud.",
+        "   - For example, for a spectrogram, describe it as 'A spectrogram showing formants' and DO NOT read the labels like '/ba/' or '/ga/'.",
+        "4. Include relevant technical terms from the context when appropriate.",
+        "5. Consider how this image fits into the overall document theme.",
+        "6. If decorative, respond with 'Decorative image'."
+    ]
+    
+    prompt_text = f"""Generate a concise, descriptive alt text for this image.
+
+Context: {combined_context}
+Image Type(s): {category_str}
+Existing alt text: {existing_alt if existing_alt else 'None'}
+
+Important guidelines:
+""" + "\n".join(guidelines) + "\n\nPlease provide just the alt text without any additional commentary."
+
+
+    if model_format == "paligemma":
+        prompt_parts.append("<image>\n")
+        prompt_parts.append(prompt_text + "\n\n")
+        prompt_parts.append("Alt Text:")
+    elif model_format == "smolvlm":
+         prompt_parts.append("<image>\n")
+         # Add existing alt text to context for smolvlm
+         smol_context = combined_context
+         if existing_alt: 
+             smol_context += f". Existing Alt Text (Ignore if poor): {existing_alt}"
+         
+         # Re-create guidelines for smolvlm's Q&A format
+         smol_question = (
+            f"Write a concise, descriptive alt text for this image, which is a {category_str}. "
+            "Focus on its key information, purpose, and relationship to the context. "
+            "Use clear, academic language. "
+            "CRITICAL: For charts, graphs, diagrams, or spectrograms, describe the key takeaway, NOT the specific labels or data. "
+            "For example, do not say '/ba/' or '/ga/'. "
+            "If decorative, say 'Decorative image'."
+         )
+         
+         prompt_parts.append(f"Context: {smol_context}\n\n")
+         prompt_parts.append(f"Question: {smol_question}\n\n")
+         prompt_parts.append("Answer:")
+    return "".join(prompt_parts)
+# --- END MODIFICATION ---
+
+# --- END MODIFICATION ---
 
 
 def classify_and_generate_alt_text(
@@ -241,35 +334,90 @@ def classify_and_generate_alt_text(
 ):
     """Generate alt text using primary model (PaliGemma), falling back if necessary."""
     logger.info(f"Generating alt text for image {task_idx+1} ({ext})")
-    processed_image = preprocess_image(image_bytes)
+    try:
+        processed_image = preprocess_image(image_bytes)
+    except ValueError as e: # Catch our specific error
+        if "Unsupported image format" in str(e):
+            logger.warning(f"Task {task_idx+1}: Skipping AI processing due to unsupported image format.")
+            # --- START MODIFICATION: Remove short_description from return ---
+            return ["Needs Review"], "Unsupported image format (WMF/EMF). Please provide alt text manually."
+            # --- END MODIFICATION ---
+        else:
+            raise # Re-raise other unexpected errors
+
     alt_text = ""
-    categories = ["Other"]
+    categories = ["Other"] # Default
     primary_model_loaded = primary_model_system and primary_model_system.get("model") and primary_model_system.get("type") == "vision_model_paligemma"
 
+    # --- START MODIFICATION: Define valid categories ONCE ---
+    valid_categories = ["Graph", "Chart", "Map", "Diagram", "Table", "Photograph", "Text", "Screenshot", "Equation", "Other"]
+    valid_categories_map = {cat.lower(): cat for cat in valid_categories}
+    # --- END MODIFICATION ---
+
     if primary_model_loaded:
-        logger.info("Using primary model (PaliGemma).")
+        logger.info("Using primary model (PaliGemma) - Pass 1 (Tagging).")
         try:
             model, processor = primary_model_system["model"], primary_model_system["processor"]
             gpu_settings = get_gpu_settings()
-            prompt_text = create_alt_text_prompt(structured_context, existing_alt, model_format="paligemma")
-            logger.debug(f"Primary prompt (PaliGemma):\n{prompt_text}")
+            
+            # --- START MODIFICATION: Pass 1 (Tagging) ---
+            prompt_text_pass_1 = create_tagging_prompt(structured_context, model_format="paligemma")
+            logger.debug(f"Primary prompt (PaliGemma) Pass 1:\n{prompt_text_pass_1}")
             image = Image.open(io.BytesIO(processed_image))
-            inputs = processor(text=prompt_text, images=image, return_tensors="pt").to(gpu_settings["device"])
+            inputs_pass_1 = processor(text=prompt_text_pass_1, images=image, return_tensors="pt").to(gpu_settings["device"])
+            
             with torch.inference_mode():
-                generated_ids = model.generate(**inputs, max_new_tokens=250, do_sample=False)
-                prompt_len = inputs["input_ids"].shape[1]
-                alt_text = processor.decode(generated_ids[0][prompt_len:], skip_special_tokens=True).strip()
-            logger.info(f"Primary model (PaliGemma) generated raw: '{alt_text}'")
+                generated_ids_pass_1 = model.generate(**inputs_pass_1, max_new_tokens=100, do_sample=False) # Increased token limit for safety
+                prompt_len_pass_1 = inputs_pass_1["input_ids"].shape[1]
+                generated_tags = processor.decode(generated_ids_pass_1[0][prompt_len_pass_1:], skip_special_tokens=True).strip()
+                generated_tags = re.sub(r"^(Category:|Answer:|Selected Categories:)\s*", "", generated_tags, flags=re.IGNORECASE).strip()
+            
+            # --- START MODIFICATION: Stricter cleanup logic ---
+            found_categories = set()
+            # Split by comma, clean up each piece, and check for exact match
+            potential_tags = generated_tags.split(',')
+            for tag in potential_tags:
+                cleaned_tag = tag.strip().lower()
+                if cleaned_tag in valid_categories_map:
+                    found_categories.add(valid_categories_map[cleaned_tag])
+                else:
+                    # Fallback regex for cases like "graph: diagram" (no comma)
+                    pattern = r'\b(' + '|'.join(re.escape(cat) for cat in valid_categories) + r')\b'
+                    matches = re.findall(pattern, tag, re.IGNORECASE)
+                    for match in matches:
+                        found_categories.add(valid_categories_map[match.lower()])
+            
+            categories = list(found_categories) if found_categories else ["Other"]
+            # --- END MODIFICATION ---
+            logger.info(f"Primary model (PaliGemma) Pass 1 generated tags (cleaned): {categories}")
+            # --- END MODIFICATION ---
+
+            # --- START MODIFICATION: Pass 2 (Alt Text) ---
+            logger.info("Using primary model (PaliGemma) - Pass 2 (Full Alt Text).")
+            prompt_text_pass_2 = create_alt_text_prompt(structured_context, categories, existing_alt, model_format="paligemma")
+            logger.debug(f"Primary prompt (PaliGemma) Pass 2:\n{prompt_text_pass_2}")
+            inputs_pass_2 = processor(text=prompt_text_pass_2, images=image, return_tensors="pt").to(gpu_settings["device"])
+
+            with torch.inference_mode():
+                generated_ids_pass_2 = model.generate(**inputs_pass_2, max_new_tokens=250, do_sample=False)
+                prompt_len_pass_2 = inputs_pass_2["input_ids"].shape[1]
+                alt_text = processor.decode(generated_ids_pass_2[0][prompt_len_pass_2:], skip_special_tokens=True).strip()
+            logger.info(f"Primary model (PaliGemma) Pass 2 generated raw: '{alt_text}'")
+            # --- END MODIFICATION ---
+
         except Exception as e:
             logger.error(f"Error generating alt text with primary model (PaliGemma): {e}", exc_info=True)
             alt_text = "" # Trigger fallback
+            categories = ["Other"] # Reset categories on error
     else:
         # Log reason for not using primary
         if primary_model_system is None or primary_model_system.get("type") == "failed": logger.warning("Primary model (PaliGemma) failed to load.")
         elif not primary_model_loaded: logger.warning(f"Primary model (PaliGemma) not loaded or incorrect type ('{primary_model_system.get('type')}').")
         alt_text = ""
+        categories = ["Other"]
 
-    # Fallback Logic
+    # --- START MODIFICATION: Reworked Fallback Logic ---
+    # --- START MODIFICATION: Define unhelpful_patterns_check BEFORE use ---
     unhelpful_patterns_check = [
         r"unanswerable", r"i am unable to", r"i cannot answer", r"cannot provide",
         r"sorry, as a base vlm", # Added refusal
@@ -278,30 +426,64 @@ def classify_and_generate_alt_text(
         r"GroundTruth label", r"quarterly spending graph",
         r"Purpose/Purpose:", r"List of Extra Readings", r"Christopher's Broken fish",
         r"Image of:", r"Write a concise alt text", r"Answer:", r"Context:", r"Question:",
-        r"CRITICAL Rules:", r"DO NOT repeat this prompt", r"Generated Alt Text:",
+        r"Generated Alt Text:",
+        # --- START MODIFICATION: Fix missing quotation mark ---
         r"Describe the image concisely"
+        # --- END MODIFICATION ---
     ]
+    # --- END MODIFICATION ---
     is_unhelpful = not alt_text or any(re.search(pattern, alt_text, re.IGNORECASE) for pattern in unhelpful_patterns_check)
 
     if is_unhelpful:
         if not primary_model_loaded: logger.warning("Attempting fallback because primary model didn't load.")
         elif not alt_text: logger.warning("Attempting fallback because primary model produced empty output.")
         else: logger.warning(f"Primary model output was unhelpful or copied prompt: '{alt_text}'. Attempting fallback.")
+        
         try:
             fallback_model_info = get_fallback_model() # Get SmolVLM info
             if fallback_model_info and fallback_model_info.get("model"):
-                logger.info("Using fallback vision model (SmolVLM).")
                 from src.models.vision_processor import process_image as process_fallback_image
-                fallback_prompt = create_alt_text_prompt(structured_context, existing_alt, model_format="smolvlm")
-                logger.debug(f"Fallback prompt:\n{fallback_prompt}")
-                alt_text = process_fallback_image(processed_image, fallback_prompt)
-                logger.info(f"Fallback model generated raw: '{alt_text}'")
+                
+                # Fallback Pass 1 (Tagging)
+                logger.info("Using fallback vision model (SmolVLM) - Pass 1 (Tagging).")
+                fallback_prompt_pass_1 = create_tagging_prompt(structured_context, model_format="smolvlm")
+                logger.debug(f"Fallback prompt Pass 1:\n{fallback_prompt_pass_1}")
+                generated_tags_fallback = process_fallback_image(processed_image, fallback_prompt_pass_1)
+                generated_tags_fallback = re.sub(r"^(Category:|Answer:|Selected Categories:)\s*", "", generated_tags_fallback, flags=re.IGNORECASE).strip()
+                
+                # --- START MODIFICATION: Stricter cleanup logic ---
+                found_categories = set()
+                # Split by comma, clean up each piece, and check for exact match
+                potential_tags = generated_tags_fallback.split(',')
+                for tag in potential_tags:
+                    cleaned_tag = tag.strip().lower()
+                    if cleaned_tag in valid_categories_map:
+                        found_categories.add(valid_categories_map[cleaned_tag])
+                    else:
+                        # Fallback regex for cases like "graph: diagram" (no comma)
+                        pattern = r'\b(' + '|'.join(re.escape(cat) for cat in valid_categories) + r')\b'
+                        matches = re.findall(pattern, tag, re.IGNORECASE)
+                        for match in matches:
+                            found_categories.add(valid_categories_map[match.lower()])
+                
+                categories = list(found_categories) if found_categories else ["Other"]
+                # --- END MODIFICATION ---
+                logger.info(f"Fallback model Pass 1 generated tags (cleaned): {categories}")
+
+                # Fallback Pass 2 (Alt Text)
+                logger.info("Using fallback vision model (SmolVLM) - Pass 2 (Full Alt Text).")
+                fallback_prompt_pass_2 = create_alt_text_prompt(structured_context, categories, existing_alt, model_format="smolvlm")
+                logger.debug(f"Fallback prompt Pass 2:\n{fallback_prompt_pass_2}")
+                alt_text = process_fallback_image(processed_image, fallback_prompt_pass_2)
+                logger.info(f"Fallback model Pass 2 generated raw: '{alt_text}'")
+                
             else:
                  logger.error("Fallback model (SmolVLM) also failed to load.")
                  alt_text = "Image could not be processed."; categories = ["Needs Review"]
         except Exception as fallback_e:
              logger.error(f"Error during fallback generation: {fallback_e}", exc_info=True)
              alt_text = "Fallback model error."; categories = ["Needs Review"]
+    # --- END MODIFICATION ---
 
     # Final Post-processing
     alt_text = alt_text.replace("<|end|>", "").replace("<image>", "").replace("ASSISTANT:", "").replace("USER:", "").strip()
@@ -327,7 +509,13 @@ def classify_and_generate_alt_text(
     refusal_keywords = ["unanswerable", "unable to", "cannot answer", "cannot provide", "sorry, as a base vlm"]
     if any(keyword in alt_text.lower() for keyword in refusal_keywords):
         logger.warning(f"Detected refusal keyword in output: '{alt_text}'. Clearing.")
-        alt_text = ""; categories = ["Needs Review"]; is_refusal_or_irrelevant = True
+        alt_text = ""; is_refusal_or_irrelevant = True
+
+    # --- START MODIFICATION: Add check for prompt-like text ---
+    if "/ba/" in alt_text or "/da/" in alt_text or "/ga/" in alt_text:
+        logger.warning(f"Detected problematic text reading in output: '{alt_text}'. Clearing.")
+        alt_text = ""; is_refusal_or_irrelevant = True
+    # --- END MODIFICATION ---
 
     if not is_refusal_or_irrelevant:
         irrelevant_patterns = [
@@ -340,7 +528,7 @@ def classify_and_generate_alt_text(
              if cleaned_alt and cleaned_pattern and (cleaned_alt.lower() == cleaned_pattern.lower() or cleaned_alt.lower().startswith(cleaned_pattern.lower())):
                  if len(cleaned_alt) < len(cleaned_pattern) + 15:
                      logger.warning(f"Detected irrelevant text reading '{pattern}' dominating output: '{alt_text}'. Clearing.")
-                     alt_text = ""; categories = ["Needs Review"]; is_refusal_or_irrelevant = True; break
+                     alt_text = ""; is_refusal_or_irrelevant = True; break
 
     if not is_refusal_or_irrelevant:
         for pattern in cleanup_patterns:
@@ -385,22 +573,17 @@ def classify_and_generate_alt_text(
          alt_text = existing_alt
          if not alt_text:
              idx_str = f" {task_idx + 1}" if task_idx is not None else ""; alt_text = f"Image{idx_str}" + (f" on Slide {slide_num}" if slide_num else "")
-             if categories != ["Needs Review"]: categories = ["Needs Review"]
-         elif categories != ["Needs Review"]: categories = ["Chart"] if any(w in existing_alt.lower() for w in ["chart", "graph", "plot", "matrix", "table", "diagram"]) else ["Other"]
-
-    # Re-categorize
-    if categories != ["Needs Review"]:
-        final_alt_lower = alt_text.lower()
-        if any(w in final_alt_lower for w in ["chart", "graph", "plot", "matrix", "table"]): categories = ["Chart"]
-        elif "diagram" in final_alt_lower: categories = ["Diagram"]
-        elif any(w in final_alt_lower for w in ["photo", "photograph", "picture", "screenshot"]): categories = ["Photograph"]
-        elif "qr code" in final_alt_lower: categories = ["QR Code"]
-        elif final_alt_lower == "decorative image": categories = ["Decorative"]
-        else: categories = ["Other"]
+             if "Needs Review" not in categories: categories.append("Needs Review")
+         
+    # --- START MODIFICATION: Remove re-categorization logic. It's now done first. ---
+    # (The old logic here is removed)
+    # --- END MODIFICATION ---
 
     final_alt_text_to_return = alt_text
     logger.info(f"Final alt text for image {task_idx+1}: '{final_alt_text_to_return}' (Category: {categories})")
+    # --- START MODIFICATION: Return categories and alt_text ---
     return categories, final_alt_text_to_return
+    # --- END MODIFICATION ---
 
 
 # --- START MODIFICATION: Refined context extraction helpers ---
@@ -504,16 +687,23 @@ def run_agent_pipeline(file_path, ext, progress_callback=None, partial_save_dir=
             try: text_rag_instance.add_documents(texts)
             except Exception as e: logger.error(f"Failed to add documents to SimpleTextRAG: {e}")
 
-        image_tasks = []
+        # --- START MODIFICATION: Handle unsupported formats ---
+        image_tasks = [] # Tasks for AI processing
+        placeholder_results = [] # Results for skipped images
+        current_image_index = 0
+        # --- END MODIFICATION ---
+
         if ext == ".pptx":
-            # --- START MODIFICATION: Use correct XML access for alt text ---
             try:
                 pres = Presentation(file_path)
                 for slide_num, slide in enumerate(pres.slides, 1):
                     for shape in slide.shapes:
                         if isinstance(shape, PptxPicture):
+                            current_image_index += 1
                             try:
                                 img_bytes = shape.image.blob
+                                content_type = shape.image.content_type.lower()
+                                
                                 # Correctly access alt text via XML element attributes safely
                                 alt_text = ""
                                 nvPr = getattr(getattr(getattr(shape, '_element', None), 'nvPicPr', None), 'cNvPr', None)
@@ -523,104 +713,197 @@ def run_agent_pipeline(file_path, ext, progress_callback=None, partial_save_dir=
                                 structured_context = get_context_for_image_pptx(slide, shape)
                                 structured_context["doc_title"] = document_metadata.get('title')
 
+                                # --- START MODIFICATION: Check for WMF/EMF ---
+                                if 'wmf' in content_type or 'emf' in content_type:
+                                    logger.warning(f"Skipping unsupported image format ({content_type}) for image {current_image_index} on slide {slide_num}.")
+                                    placeholder_results.append({
+                                        "classification": ["Needs Review"],
+                                        "alt_text": alt_text,
+                                        "generated_alt_text": "Unsupported image format (WMF/EMF). Please provide alt text manually.",
+                                        # "short_description": "Unsupported format", # Removed
+                                        "image_idx": current_image_index,
+                                        "slide_num": slide_num,
+                                        "image_data": UNSUPPORTED_IMAGE_PLACEHOLDER
+                                    })
+                                    continue # Skip to the next shape
+                                # --- END MODIFICATION ---
+
                                 image_tasks.append({
                                     "bytes": img_bytes, "alt": alt_text,
                                     "structured_context": structured_context,
-                                    "slide_num": slide_num
+                                    "slide_num": slide_num,
+                                    "task_idx": current_image_index # Pass the global index
                                 })
                             except Exception as img_e:
                                  shape_id_str = f"shape ID {shape.shape_id}" if hasattr(shape, 'shape_id') else "shape"
-                                 logger.warning(f"Could not extract image/context from {shape_id_str} on slide {slide_num}: {img_e}", exc_info=True) # Log traceback
+                                 logger.warning(f"Could not extract image/context from {shape_id_str} on slide {slide_num}: {img_e}", exc_info=True)
             except Exception as e:
                 logger.error(f"Error processing PPTX file {file_path} for images: {e}", exc_info=True)
-            # --- END MODIFICATION ---
 
         elif ext == ".docx" and doc_object:
-             # (DOCX extraction logic remains the same - already uses safe .get())
             try:
-                img_counter = 0; processed_rel_ids = set()
+                processed_rel_ids = set()
                 for shape in doc_object.part.inline_shapes:
                     if hasattr(shape, 'type') and shape.type == 3: # WD_INLINE_SHAPE.PICTURE
-                        img_counter += 1
+                        current_image_index += 1
                         try:
                             inline_el = shape._inline
                             rId = inline_el.graphic.graphicData.pic.blipFill.blip.embed
-                            if rId in processed_rel_ids: continue
+                            if rId in processed_rel_ids: current_image_index -= 1; continue # Don't double count
+                            
                             rel = doc_object.part.rels[rId]
-                            if not rel.is_external:
-                                img_bytes = rel.target_part.blob; processed_rel_ids.add(rId)
-                                alt_text = ""
-                                try:
-                                     docPr = inline_el.find(qn('wp:docPr'))
-                                     if docPr is not None: alt_text = docPr.get('descr', '')
-                                except Exception as alt_e: logger.warning(f"Error accessing docPr descr for inline shape {img_counter}: {alt_e}")
-                                structured_context = get_context_for_image_docx(doc_object, inline_el)
-                                image_tasks.append({"bytes": img_bytes, "alt": alt_text, "structured_context": structured_context, "slide_num": None})
-                        except Exception as shape_e: logger.error(f"Error processing inline shape {img_counter}: {shape_e}", exc_info=True)
+                            if rel.is_external: current_image_index -= 1; continue
+                            
+                            processed_rel_ids.add(rId)
+                            img_bytes = rel.target_part.blob
+                            content_type = rel.target_part.content_type.lower()
+                            alt_text = ""
+                            try:
+                                 docPr = inline_el.find(qn('wp:docPr'))
+                                 if docPr is not None: alt_text = docPr.get('descr', '')
+                            except Exception as alt_e: logger.warning(f"Error accessing docPr descr for inline shape {current_image_index}: {alt_e}")
+                            
+                            structured_context = get_context_for_image_docx(doc_object, inline_el)
+
+                            # --- START MODIFICATION: Check for WMF/EMF ---
+                            if 'wmf' in content_type or 'emf' in content_type:
+                                logger.warning(f"Skipping unsupported image format ({content_type}) for inline DOCX image {current_image_index} (rId: {rId}).")
+                                placeholder_results.append({
+                                    "classification": ["Needs Review"],
+                                    "alt_text": alt_text,
+                                    "generated_alt_text": "Unsupported image format (WMF/EMF). Please provide alt text manually.",
+                                    # "short_description": "Unsupported format", # Removed
+                                    "image_idx": current_image_index,
+                                    "slide_num": None,
+                                    "image_data": UNSUPPORTED_IMAGE_PLACEHOLDER
+                                })
+                                continue # Skip to the next shape
+                            # --- END MODIFICATION ---
+
+                            image_tasks.append({"bytes": img_bytes, "alt": alt_text, "structured_context": structured_context, "slide_num": None, "task_idx": current_image_index, "rId": rId})
+                        except Exception as shape_e: logger.error(f"Error processing inline shape {current_image_index}: {shape_e}", exc_info=True)
+                
                 for rId, rel in doc_object.part.rels.items():
                     if "image" in rel.target_ref and not rel.is_external and rId not in processed_rel_ids:
-                        img_counter += 1; logger.warning(f"Found image via rels (rId: {rId}) not caught by inline_shapes. Using basic context.")
-                        try: img_bytes = rel.target_part.blob; processed_rel_ids.add(rId)
-                        except Exception as blob_e: logger.error(f"Could not read image blob for rId {rId}: {blob_e}"); continue
+                        current_image_index += 1
+                        logger.warning(f"Found image via rels (rId: {rId}) not caught by inline_shapes. Using basic context.")
+                        try:
+                            img_bytes = rel.target_part.blob; processed_rel_ids.add(rId)
+                            content_type = rel.target_part.content_type.lower()
+                        except Exception as blob_e: logger.error(f"Could not read image blob for rId {rId}: {blob_e}"); current_image_index -= 1; continue
+                        
                         structured_context = {"doc_title": document_metadata.get('title'), "slide_title": None, "surrounding_text": document_metadata.get('summary', '')}
-                        image_tasks.append({"bytes": img_bytes, "alt": "", "structured_context": structured_context, "slide_num": None})
+                        
+                        # --- START MODIFICATION: Check for WMF/EMF ---
+                        if 'wmf' in content_type or 'emf' in content_type:
+                            logger.warning(f"Skipping unsupported image format ({content_type}) for rels DOCX image {current_image_index} (rId: {rId}).")
+                            placeholder_results.append({
+                                "classification": ["Needs Review"],
+                                "alt_text": "", # No alt text available for these
+                                "generated_alt_text": "Unsupported image format (WMF/EMF). Please provide alt text manually.",
+                                # "short_description": "Unsupported format", # Removed
+                                "image_idx": current_image_index,
+                                "slide_num": None,
+                                "image_data": UNSUPPORTED_IMAGE_PLACEHOLDER
+                            })
+                            continue # Skip to the next rel
+                        # --- END MODIFICATION ---
+                        
+                        image_tasks.append({"bytes": img_bytes, "alt": "", "structured_context": structured_context, "slide_num": None, "task_idx": current_image_index, "rId": rId})
             except Exception as e: logger.error(f"Error processing DOCX file {file_path} for images: {e}", exc_info=True)
 
-        total_images = len(image_tasks)
+        # --- START MODIFICATION: Use new total count ---
+        total_images = current_image_index
+        # --- END MODIFICATION ---
+        
         if not total_images:
             logger.warning(f"No valid images found or extracted from {file_path}")
             if progress_callback: progress_callback("No images found", 0, 0)
             return []
 
-        processed_count = 0; results = []
+        # --- START MODIFICATION: Adjust processed count ---
+        processed_count = len(placeholder_results) # Start count from skipped images
+        # --- END MODIFICATION ---
+        
         executor_class = concurrent.futures.ThreadPoolExecutor
         max_workers = 1 if gpu_settings.get("device") == "cuda" else DEFAULT_MAX_WORKERS
         logger.info(f"Using {executor_class.__name__} with max_workers={max_workers}")
         executor = executor_class(max_workers=max_workers)
 
-        def process_single_image(task_idx, task):
+        def process_single_image(task):
             nonlocal processed_count
+            # --- START MODIFICATION: Use task_idx from task ---
+            task_idx = task["task_idx"]
+            # --- END MODIFICATION ---
             current_primary_model_system = _primary_model_cache
             try:
+                # --- START MODIFICATION: Update return values ---
                 categories, generated_alt = classify_and_generate_alt_text(
+                # --- END MODIFICATION ---
                     image_bytes=task["bytes"], structured_context=task["structured_context"],
                     primary_model_system=current_primary_model_system, ext=ext,
-                    existing_alt=task["alt"], slide_num=task.get("slide_num"), task_idx=task_idx
+                    existing_alt=task["alt"], slide_num=task.get("slide_num"), 
+                    task_idx=task_idx # Pass the correct index
                 )
                 with _results_lock:
                     processed_count += 1
                     status_msg = f"Processing image {processed_count}/{total_images}"
-                    if categories == ["Needs Review"]: status_msg += " (Review Recommended)"
+                    if "Needs Review" in categories: status_msg += " (Review Recommended)"
                     if progress_callback: progress_callback(status_msg, processed_count, total_images)
+                
                 import base64; image_data_uri = None
                 try:
                     processed_display_image = preprocess_image(task['bytes'], max_size=256)
                     b64_image = base64.b64encode(processed_display_image).decode('utf-8')
                     image_data_uri = f"data:image/jpeg;base64,{b64_image}"
-                except Exception as enc_e: logger.error(f"Could not encode image {task_idx+1} for display: {enc_e}")
-                return {"classification": categories, "alt_text": task["alt"], "generated_alt_text": generated_alt,
-                        "image_idx": task_idx + 1, "slide_num": task.get("slide_num"), "image_data": image_data_uri}
+                except Exception as enc_e: 
+                    logger.error(f"Could not encode image {task_idx} for display: {enc_e}")
+                    image_data_uri = "https://placehold.co/400x300/EFEFEF/AAAAAA?text=Preview+Error"
+
+                # --- START MODIFICATION: Update result dictionary ---
+                result_data = {"classification": categories, "alt_text": task["alt"], "generated_alt_text": generated_alt,
+                        "image_idx": task_idx, # Use the global index
+                        "slide_num": task.get("slide_num"), "image_data": image_data_uri}
+                if "rId" in task:
+                    result_data["rId"] = task["rId"]
+                return result_data
+                # --- END MODIFICATION ---
             except Exception as e:
-                logger.error(f"Error in process_single_image task for image {task_idx+1}: {e}", exc_info=True)
+                logger.error(f"Error in process_single_image task for image {task_idx}: {e}", exc_info=True)
                 with _results_lock:
                     processed_count += 1
                     if progress_callback: progress_callback(f"Error processing image {processed_count}/{total_images}", processed_count, total_images)
-                return None
+                
+                # --- START MODIFICATION: Update error result dictionary ---
+                result_data = {
+                    "classification": ["Needs Review"], "alt_text": task["alt"], "generated_alt_text": "Error during processing.",
+                    "image_idx": task_idx,
+                    "slide_num": task.get("slide_num"), "image_data": "https://placehold.co/400x300/EFEFEF/AAAAAA?text=Processing+Error"
+                }
+                if "rId" in task:
+                    result_data["rId"] = task["rId"]
+                return result_data
+                # --- END MODIFICATION ---
 
-        future_to_task = {executor.submit(process_single_image, i, task): i for i, task in enumerate(image_tasks)}
+        # --- START MODIFICATION: Use task_idx as key ---
+        future_to_task_idx = {executor.submit(process_single_image, task): task["task_idx"] for task in image_tasks}
         temp_results = {}
-        for future in concurrent.futures.as_completed(future_to_task):
-            idx = future_to_task[future]
+        for future in concurrent.futures.as_completed(future_to_task_idx):
+            idx = future_to_task_idx[future]
             try:
                 result = future.result();
                 if result: temp_results[idx] = result
-            except Exception as exc: logger.error(f'Image processing task {idx + 1} generated an exception: {exc}')
+            except Exception as exc: logger.error(f'Image processing task {idx} generated an exception: {exc}')
 
-        results = [temp_results[i] for i in sorted(temp_results.keys())]
+        # Combine processed results with placeholders and sort
+        processed_results = [temp_results[i] for i in sorted(temp_results.keys())]
+        all_results = placeholder_results + processed_results
+        final_sorted_results = sorted(all_results, key=lambda r: r.get('image_idx', 0))
+        # --- END MODIFICATION ---
+
         if progress_callback: progress_callback("Processing complete", total_images, total_images)
-        logger.info(f"Pipeline finished processing {len(results)} images in {time.time() - pipeline_start:.2f}s")
-        return results
+        logger.info(f"Pipeline finished processing {len(final_sorted_results)} images in {time.time() - pipeline_start:.2f}s")
+        return final_sorted_results
     finally:
          if executor:
              logger.info("Shutting down thread pool executor."); executor.shutdown(wait=True); logger.info("Executor shut down complete.")
-
