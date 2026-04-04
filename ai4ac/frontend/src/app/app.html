@@ -77,8 +77,27 @@
                 <div class="old-alt-text">{{ img.alt_text || '—' }}</div>
               </div>
               <!-- --- START MODIFICATION: Fix tags ngIf/ngFor --- -->
-              <div class="tags-container" *ngIf="img.classification?.length">
-                <span class="tag" *ngFor="let tag of img.classification">{{ tag }}</span>
+              <div class="tags-container pipeline-controls" *ngIf="img.classification?.length">
+                <select [(ngModel)]="img.classification[0]" class="tag-dropdown">
+                  
+                  <option *ngIf="!availableTags.includes(img.classification[0])" [value]="img.classification[0]">
+                    {{ img.classification[0] }}
+                  </option>
+                  
+                  <option *ngFor="let tag of availableTags" [value]="tag">
+                    {{ tag }}
+                  </option>
+                  
+                </select>
+
+                <button 
+                  class="btn-regenerate" 
+                  (click)="regeneratePipeline(img)" 
+                  [disabled]="img.isRegenerating">
+                  
+                  <span *ngIf="!img.isRegenerating">Regenerate</span>
+                  <span *ngIf="img.isRegenerating">Processing...</span>
+                </button>
               </div>
               <!-- --- END MODIFICATION --- -->
             </div>

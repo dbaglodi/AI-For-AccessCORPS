@@ -26,6 +26,8 @@ import numpy as np
 from transformers import AutoProcessor, PaliGemmaProcessor, PaliGemmaForConditionalGeneration
 
 # Local imports
+from src.pipelines.equation_pipeline import extract_equations_from_image, insert_equation_into_docx
+from src.pipelines.table_pipeline import extract_table_from_image, insert_table_into_docx, insert_table_into_pptx
 # Calculate project root (ai4ac/backend) relative to this file
 PROJECT_ROOT = Path(__file__).parent.parent.parent.absolute()
 sys.path.append(str(PROJECT_ROOT))
@@ -227,6 +229,10 @@ def create_alt_text_prompt(structured_context, categories, existing_alt, model_f
     p = f"Context: {ctx}\nExisting Alt: {existing_alt}\n{instr}\nAlt Text:"
     return f"<image>\n{p}" if model_format == "paligemma" else f"<image>\n{p}\nAnswer:"
 
+def create_mathml_prompt(model_format="paligemma"):
+    prompt = "Identify the mathematical equation in the image and convert it to valid MathML 3.0. Return only the MathML code."
+    return f"<image>\n{prompt}\nMathML:" if model_format == "paligemma" else f"<image>\nQuestion: {prompt}\nAnswer:"
+
 # --- Alt Text Pipeline ---
 
 def classify_and_generate_alt_text(image_bytes, structured_context, primary_model_system=None, ext=".pptx", existing_alt="", slide_num=None, task_idx=0):
@@ -234,10 +240,11 @@ def classify_and_generate_alt_text(image_bytes, structured_context, primary_mode
         prompt_image_bytes = preprocess_image(image_bytes)
     except ValueError as e:
         if str(e) == "Unsupported image format":
-            return ["Needs Review"], "Unsupported image format (WMF/EMF) could not be converted for analysis."
-        return ["Needs Review"], f"Preprocessing error: {e}"
+            return ["Needs Review"], "Unsupported image format (WMF/EMF) could not be converted for analysis.", ""
+        return ["Needs Review"], f"Preprocessing error: {e}", ""
 
     alt_text = ""
+    mathml = ""
     categories = ["Other"]
     complex_types = {"Graph", "Chart", "Map", "Table"}
     valid_map = {c.lower(): c for c in ["Graph", "Chart", "Map", "Diagram", "Table", "Photograph", "Text", "Screenshot", "Equation", "Other"]}
@@ -257,7 +264,7 @@ def classify_and_generate_alt_text(image_bytes, structured_context, primary_mode
             
             categories = [valid_map[t.strip().lower()] for t in gen_tags.split(',') if t.strip().lower() in valid_map] or ["Other"]
             
-            # Pass 2: Branching
+            # Pass 2: Branching for Alt Text
             is_complex = any(c in complex_types for c in categories)
             p2 = create_complex_data_alt_text_prompt(structured_context, categories, existing_alt, "paligemma") if is_complex else create_alt_text_prompt(structured_context, categories, existing_alt, "paligemma")
             
@@ -265,6 +272,15 @@ def classify_and_generate_alt_text(image_bytes, structured_context, primary_mode
             with torch.inference_mode():
                 out2 = model.generate(**inputs2, max_new_tokens=250)
                 alt_text = processor.decode(out2[0][inputs2["input_ids"].shape[1]:], skip_special_tokens=True).strip()
+
+            # Pass 3: MathML conversion if it's an Equation
+            if "Equation" in categories:
+                p3 = create_mathml_prompt("paligemma")
+                inputs3 = processor(text=p3, images=image, return_tensors="pt").to(device)
+                with torch.inference_mode():
+                    out3 = model.generate(**inputs3, max_new_tokens=500)
+                    mathml = processor.decode(out3[0][inputs3["input_ids"].shape[1]:], skip_special_tokens=True).strip()
+
         except Exception as e:
             logger.error(f"Primary model prompt failed for image {task_idx}: {e}")
 
@@ -285,6 +301,11 @@ def classify_and_generate_alt_text(image_bytes, structured_context, primary_mode
                 is_complex = any(c in complex_types for c in categories)
                 p2_fb = create_complex_data_alt_text_prompt(structured_context, categories, existing_alt, "smolvlm") if is_complex else create_alt_text_prompt(structured_context, categories, existing_alt, "smolvlm")
                 alt_text = fb_process(prompt_image_bytes, p2_fb)
+
+                # MathML Fallback
+                if "Equation" in categories and not mathml:
+                    p3_fb = create_mathml_prompt("smolvlm")
+                    mathml = fb_process(prompt_image_bytes, p3_fb)
         except Exception as e:
             logger.error(f"Fallback prompt failed for image {task_idx}: {e}")
 
@@ -292,6 +313,9 @@ def classify_and_generate_alt_text(image_bytes, structured_context, primary_mode
     alt_text = re.sub(r"^(Answer:|Alt Text:)\s*", "", alt_text, flags=re.IGNORECASE).strip()
     alt_text = alt_text.replace("<|end|>", "").replace("<image>", "").strip()
     
+    mathml = re.sub(r"^(Answer:|MathML:)\s*", "", mathml, flags=re.IGNORECASE).strip()
+    mathml = mathml.replace("<|end|>", "").replace("<image>", "").strip()
+
     if any(p in alt_text for p in ["/ba/", "/da/", "/ga/"]):
         logger.warning(f"Problematic text reading detected in image {task_idx}. Clearing.")
         alt_text = ""; categories.append("Needs Review")
@@ -300,7 +324,7 @@ def classify_and_generate_alt_text(image_bytes, structured_context, primary_mode
         alt_text = existing_alt or f"Image {task_idx+1}"
         if "Needs Review" not in categories: categories.append("Needs Review")
 
-    return categories, alt_text[:150]
+    return categories, alt_text[:150], mathml
 
 # --- Context Extraction ---
 
@@ -336,6 +360,8 @@ def run_agent_pipeline(file_path, ext, progress_callback=None, **kwargs):
         if ext == ".pptx":
             pres = Presentation(file_path)
             images = []
+            pres_modified = False # <--- Track PPTX changes
+            
             for slide_num, slide in enumerate(pres.slides, 1):
                 for shape in slide.shapes:
                     if isinstance(shape, PptxPicture):
@@ -346,8 +372,17 @@ def run_agent_pipeline(file_path, ext, progress_callback=None, **kwargs):
                 try:
                     alt = getattr(getattr(shape, '_element', None).nvPicPr, 'cNvPr', {}).attrib.get('descr', '')
                     ctx = get_context_for_image_pptx(pres.slides[slide_num-1], shape)
-                    cats, gen_alt = classify_and_generate_alt_text(shape.image.blob, ctx, primary_model, ext, alt, slide_num, i-1)
+                    cats, gen_alt, _ = classify_and_generate_alt_text(shape.image.blob, ctx, primary_model, ext, alt, slide_num, i-1)
                     
+                    # --- TABLE PIPELINE INTEGRATION ---
+                    if cats and cats[0] == "Table":
+                        logger.info(f"Image {i} primary classification is Table. Extracting data...")
+                        table_data = extract_table_from_image(shape.image.blob)
+                        if table_data:
+                            insert_table_into_pptx(pres.slides[slide_num-1], shape, table_data, alt_text=gen_alt)
+                            pres_modified = True
+                    # ----------------------------------
+
                     import base64
                     try:
                         disp_bytes = preprocess_image(shape.image.blob, 256)
@@ -361,25 +396,50 @@ def run_agent_pipeline(file_path, ext, progress_callback=None, **kwargs):
                     results.append({"classification": ["Needs Review"], "alt_text": "", "generated_alt_text": f"Error: {inner_e}", "image_idx": i, "slide_num": slide_num})
                 
                 if progress_callback: progress_callback(f"Image {i}/{total_count}", i, total_count)
+                
+            if pres_modified:
+                pres.save(file_path)
 
         elif ext == ".docx":
             doc = Document(file_path)
             inline_shapes = list(doc.part.inline_shapes)
             total_count = len(inline_shapes)
+            doc_modified = False # <--- Track DOCX changes
+            
             for i, shape in enumerate(inline_shapes, 1):
                 try:
                     if shape.type == 3: # Picture
                         rId = shape._inline.graphic.graphicData.pic.blipFill.blip.embed
                         rel = doc.part.rels[rId]
+                        image_bytes = rel.target_part.blob
+                        
                         alt = shape._inline.find(qn('wp:docPr')).get('descr', '')
                         ctx = get_context_for_image_docx(doc, shape._inline)
-                        cats, gen_alt = classify_and_generate_alt_text(rel.target_part.blob, ctx, primary_model, ext, alt, None, i-1)
+                        cats, gen_alt, _ = classify_and_generate_alt_text(image_bytes, ctx, primary_model, ext, alt, None, i-1)
+                        
+                        # --- EQUATION PIPELINE INTEGRATION ---
+                        if cats and cats[0] == "Equation":
+                            logger.info(f"Image {i} primary classification is Equation. Extracting LaTeX...")
+                            equations = extract_equations_from_image(image_bytes)
+                            if equations:
+                                insert_equation_into_docx(doc, shape._inline, equations)
+                                doc_modified = True
+                        # -------------------------------------
+
+                        # --- TABLE PIPELINE INTEGRATION ---
+                        if cats and cats[0] == "Table":
+                            logger.info(f"Image {i} primary classification is Table. Extracting data...")
+                            table_data = extract_table_from_image(image_bytes)
+                            if table_data:
+                                insert_table_into_docx(doc, shape._inline, table_data, alt_text=gen_alt)
+                                doc_modified = True
+                        # ----------------------------------
                         
                         import base64
                         try:
-                            disp_bytes = preprocess_image(rel.target_part.blob, 256)
+                            disp_bytes = preprocess_image(image_bytes, 256)
                         except:
-                            disp_bytes = rel.target_part.blob
+                            disp_bytes = image_bytes
                             
                         img_data = base64.b64encode(disp_bytes).decode()
                         results.append({"classification": cats, "alt_text": alt, "generated_alt_text": gen_alt, "image_idx": i, "image_data": f"data:image/jpeg;base64,{img_data}", "rId": rId})
@@ -388,6 +448,9 @@ def run_agent_pipeline(file_path, ext, progress_callback=None, **kwargs):
                     results.append({"classification": ["Needs Review"], "alt_text": "", "generated_alt_text": f"Error: {inner_e}", "image_idx": i})
                 
                 if progress_callback: progress_callback(f"Image {i}/{total_count}", i, total_count)
+            
+            if doc_modified:
+                doc.save(file_path)
         
         return results
     except Exception as e:

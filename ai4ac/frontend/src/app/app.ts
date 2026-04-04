@@ -35,6 +35,16 @@ export class AppComponent implements OnDestroy, AfterViewInit {
   @ViewChild('cardsContainer') cardsContainerRef!: ElementRef<HTMLDivElement>;
   // --- END MODIFICATION ---
 
+  availableTags: string[] = [
+    'Equation', 
+    'Table', 
+    'Figure', 
+    'Diagram', 
+    'Chart', 
+    'Photo', 
+    'Needs Review'
+  ];
+
   // --- START MODIFICATION: Inject ChangeDetectorRef ---
   constructor(private http: HttpClient, private cdr: ChangeDetectorRef) { }
   // --- END MODIFICATION ---
@@ -337,6 +347,46 @@ export class AppComponent implements OnDestroy, AfterViewInit {
     this.setActive(this.activeIndex + 1); // setActive handles wrapping
   }
   // --- END MODIFICATION ---
+
+  regeneratePipeline(img: any) {
+    if (!this.fileId) {
+      console.error("Cannot regenerate: No file ID found.");
+      return;
+    }
+
+    img.isRegenerating = true;
+    this.cdr.detectChanges(); // Force UI to show loading state
+
+    const selectedPipeline = img.classification[0]; 
+
+    const payload = {
+      image_idx: img.image_idx,
+      forced_pipeline: selectedPipeline,
+      slide_num: img.slide_num, 
+      rId: img.rId             
+    };
+
+    const url = `http://localhost:8000/api/regenerate-image/${this.fileId}`;
+
+    this.http.post(url, payload).subscribe({
+      next: (response: any) => {
+        // Update the backend's generated text
+        img.generated_alt_text = response.new_alt_text;
+        
+        // Optionally, auto-populate the user's editable textbox with the new result
+        img.userAltText = response.new_alt_text; 
+        
+        img.isRegenerating = false;
+        this.cdr.detectChanges(); // Update UI to hide loading state
+      },
+      error: (err: HttpErrorResponse) => {
+        console.error('Failed to regenerate pipeline:', err);
+        alert(`Error regenerating pipeline: ${err.message || 'Check backend console.'}`);
+        img.isRegenerating = false;
+        this.cdr.detectChanges();
+      }
+    });
+  }
 
   downloadFile() {
     if (!this.fileId) return;

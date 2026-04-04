@@ -307,3 +307,50 @@ button {
     flex-direction: column;
   }
 }
+
+.pipeline-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  margin-bottom: 15px;
+
+  .tag-dropdown {
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: 1px solid #ccc;
+    font-size: 14px;
+    background-color: #f9f9f9;
+    cursor: pointer;
+    flex-grow: 1;
+    /* Makes the dropdown take up available space */
+    max-width: 200px;
+
+    &:focus {
+      outline: none;
+      border-color: #007bff;
+      box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
+    }
+  }
+
+  .btn-regenerate {
+    padding: 6px 16px;
+    border-radius: 6px;
+    border: none;
+    background-color: #0056b3;
+    color: white;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+
+    &:hover:not(:disabled) {
+      background-color: #004494;
+    }
+
+    &:disabled {
+      background-color: #a0c4e8;
+      cursor: not-allowed;
+    }
+  }
+}

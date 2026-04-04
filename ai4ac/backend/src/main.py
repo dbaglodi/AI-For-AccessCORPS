@@ -14,6 +14,7 @@ import logging
 from dotenv import load_dotenv
 import sys
 from pathlib import Path
+from pydantic import BaseModel
 
 # Add project root to Python path
 project_root = Path(__file__).parent.parent
@@ -31,6 +32,12 @@ from pptx.shapes.picture import Picture as PptxPicture
 # --- END MODIFICATION ---
 
 app = FastAPI()
+
+class RegenerateRequest(BaseModel):
+    image_idx: int
+    forced_pipeline: str
+    slide_num: Optional[int] = None
+    rId: Optional[str] = None
 
 @app.on_event("startup")
 def startup_event():
@@ -236,6 +243,154 @@ async def update_alt_text( file_id: str, data: Dict[str, Any] = Body(description
         raise HTTPException(status_code=500, detail="Failed to save alt text updates.")
 
     return {"status": "success", "updated_count": updated_count}
+
+@app.post("/api/regenerate-image/{file_id}")
+async def regenerate_image(file_id: str, req: RegenerateRequest):
+    """
+    Forces the pipeline to re-run for a specific image using a manually selected category.
+    """
+    try:
+        # 1. Find the original file
+        orig_filename = processing_status.get(file_id, {}).get("filename", "")
+        ext = os.path.splitext(orig_filename)[1].lower() if orig_filename else None
+        
+        orig_path = UPLOAD_DIR / f"{file_id}{ext}"
+        if not orig_path.exists():
+            # Fallback to glob
+            found_files = list(UPLOAD_DIR.glob(f"{file_id}.*"))
+            if not found_files:
+                raise HTTPException(status_code=404, detail="Original file not found.")
+            orig_path = found_files[0]
+            ext = orig_path.suffix.lower()
+
+        # 2. Extract the specific image bytes
+        image_bytes = None
+        target_shape = None
+        doc = None
+        pres = None
+        
+        if ext == ".pptx":
+            pres = Presentation(orig_path)
+            images = []
+            for s_num, slide in enumerate(pres.slides, 1):
+                for shape in slide.shapes:
+                    if isinstance(shape, PptxPicture):
+                        images.append((s_num, shape))
+            if 1 <= req.image_idx <= len(images):
+                target_shape = images[req.image_idx - 1][1]
+                image_bytes = target_shape.image.blob
+            else:
+                raise HTTPException(status_code=404, detail="Image index out of bounds in PPTX.")
+                
+        elif ext == ".docx":
+            doc = Document(orig_path)
+            inline_shapes = list(doc.part.inline_shapes)
+            if 1 <= req.image_idx <= len(inline_shapes):
+                target_shape = inline_shapes[req.image_idx - 1]
+                # Look up the image part by relationship ID
+                rId = target_shape._inline.graphic.graphicData.pic.blipFill.blip.embed
+                rel = doc.part.rels[rId]
+                image_bytes = rel.target_part.blob
+            else:
+                raise HTTPException(status_code=404, detail="Image index out of bounds in DOCX.")
+
+        # 3. Route to the correct pipeline
+        from src.pipelines.agent_pipeline import classify_and_generate_alt_text, get_primary_model, get_context_for_image_docx, get_context_for_image_pptx
+        from docx.oxml.ns import qn
+        
+        # ALWAYS run the visual model first to get the descriptive alt text
+        primary_model = get_primary_model()
+        if ext == ".docx":
+            ctx = get_context_for_image_docx(doc, target_shape._inline)
+        else:
+            slide_target = pres.slides[req.slide_num - 1] if req.slide_num else pres.slides[images[req.image_idx-1][0]-1]
+            ctx = get_context_for_image_pptx(slide_target, target_shape)
+            
+        # Run generation forcing the user's selected pipeline tag
+        _, gen_alt, _ = classify_and_generate_alt_text(image_bytes, ctx, primary_model, ext, "", None, req.image_idx-1)
+        new_alt_text = gen_alt
+        doc_modified = False
+
+        # Apply the new alt text to the original image immediately
+        if ext == ".docx":
+            target_shape._inline.find(qn('wp:docPr')).set('descr', new_alt_text)
+            doc_modified = True
+        elif ext == ".pptx":
+            target_shape._element.nvPicPr.cNvPr.set('descr', new_alt_text)
+            doc_modified = True
+
+        # Now handle extra extractions (Table/Equation)
+        if req.forced_pipeline == "Equation":
+            from src.pipelines.equation_pipeline import extract_equations_from_image, insert_equation_into_docx
+            equations = extract_equations_from_image(image_bytes)
+            if equations and ext == ".docx":
+                insert_equation_into_docx(doc, target_shape._inline, equations)
+                doc_modified = True
+
+        elif req.forced_pipeline == "Table":
+            from src.pipelines.table_pipeline import extract_table_from_image, insert_table_into_docx, insert_table_into_pptx
+            table_data = extract_table_from_image(image_bytes)
+            if table_data:
+                if ext == ".docx":
+                    # Pass the generated alt text to the table
+                    insert_table_into_docx(doc, target_shape._inline, table_data, alt_text=new_alt_text)
+                    doc_modified = True
+                elif ext == ".pptx":
+                    slide_target = pres.slides[req.slide_num - 1] if req.slide_num else pres.slides[images[req.image_idx-1][0]-1]
+                    # Pass the generated alt text to the table
+                    insert_table_into_pptx(slide_target, target_shape, table_data, alt_text=new_alt_text)
+                    doc_modified = True
+            else:
+                new_alt_text = "Failed to extract table."
+
+        else:
+            # Re-run standard vision pipeline for standard classifications (Graph, Diagram, etc.)
+            from src.pipelines.agent_pipeline import classify_and_generate_alt_text, get_primary_model, get_context_for_image_docx, get_context_for_image_pptx
+            primary_model = get_primary_model()
+            if ext == ".docx":
+                ctx = get_context_for_image_docx(doc, target_shape._inline)
+            else:
+                slide_target = pres.slides[req.slide_num - 1] if req.slide_num else pres.slides[images[req.image_idx-1][0]-1]
+                ctx = get_context_for_image_pptx(slide_target, target_shape)
+                
+            # Force the categories list to start with the user's selected category
+            forced_cats = [req.forced_pipeline]
+            _, gen_alt, _ = classify_and_generate_alt_text(image_bytes, ctx, primary_model, ext, "", None, req.image_idx-1)
+            new_alt_text = gen_alt
+
+        # 4. Save document modifications (if equations/tables were inserted)
+        if doc_modified:
+            if ext == ".docx":
+                doc.save(orig_path)
+            elif ext == ".pptx":
+                pres.save(orig_path)
+
+        # 5. Update the JSON processing cache so the frontend stays synced
+        json_path = PROCESSED_DIR / f"{file_id}.json"
+        if json_path.exists():
+            with open(json_path, "r", encoding="utf-8") as f:
+                results = json.load(f)
+                
+            # Find the target image in the results array
+            for res in results:
+                if res.get("image_idx") == req.image_idx:
+                    # Update classification order and the generated text
+                    if req.forced_pipeline in res["classification"]:
+                        res["classification"].remove(req.forced_pipeline)
+                    res["classification"].insert(0, req.forced_pipeline)
+                    
+                    res["generated_alt_text"] = new_alt_text
+                    res["final_alt_text"] = new_alt_text # Overwrite final alt text as well
+                    break
+                    
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump(results, f)
+
+        return {"status": "success", "new_alt_text": new_alt_text, "pipeline_used": req.forced_pipeline}
+
+    except Exception as e:
+        logging.error(f"Failed to regenerate image {req.image_idx} for {file_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/download/{file_id}")
 def download_file(file_id: str):
