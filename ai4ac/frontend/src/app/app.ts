@@ -17,9 +17,8 @@ import { switchMap, takeWhile } from 'rxjs/operators';
 export class AppComponent implements OnDestroy, AfterViewInit {
 // --- END MODIFICATION ---
   selectedFile: File | null = null;
-  // --- START MODIFICATION: Remove uploadProgress ---
-  // uploadProgress: number = 0; // Removed
-  // --- END MODIFICATION ---
+  modelProvider: string = 'local';
+  geminiApiKey: string = '';
   fileId: string | null = null;
   images: any[] = [];
   activeIndex: number = 0;
@@ -94,6 +93,10 @@ export class AppComponent implements OnDestroy, AfterViewInit {
 
     const formData = new FormData();
     formData.append('file', this.selectedFile);
+    formData.append('provider', this.modelProvider);
+    if (this.modelProvider === 'gemini' && this.geminiApiKey) {
+      formData.append('api_key', this.geminiApiKey);
+    }
     this.processing = true;
     // --- START MODIFICATION: Set initial processing status differently ---
     this.processingStatus = { current_step: 'Uploading file...' }; // Simpler initial status
@@ -349,39 +352,48 @@ export class AppComponent implements OnDestroy, AfterViewInit {
   // --- END MODIFICATION ---
 
   regeneratePipeline(img: any) {
+    if (!img) return;
+
+    // 1. Your original error check
     if (!this.fileId) {
       console.error("Cannot regenerate: No file ID found.");
       return;
     }
 
+    // 2. Your original UI loading state
     img.isRegenerating = true;
     this.cdr.detectChanges(); // Force UI to show loading state
 
-    const selectedPipeline = img.classification[0]; 
+    // 3. Capture the pipeline (fallback to original classification if they didn't touch the dropdown)
+    const selectedPipeline = img.selectedPipeline || img.classification[0];
 
+    // 4. Determine which model provider they selected on this specific card
+    const providerToUse = img.regenProvider || 'local'; 
+
+    // 5. Build the complete payload
     const payload = {
       image_idx: img.image_idx,
       forced_pipeline: selectedPipeline,
       slide_num: img.slide_num, 
-      rId: img.rId             
+      rId: img.rId,
+      provider: providerToUse,
+      api_key: providerToUse === 'gemini' ? this.geminiApiKey : null
     };
 
-    const url = `http://localhost:8000/api/regenerate-image/${this.fileId}`;
-
-    this.http.post(url, payload).subscribe({
-      next: (response: any) => {
-        // Update the backend's generated text
-        img.generated_alt_text = response.new_alt_text;
+    // 6. Make the HTTP Request
+    this.http.post<any>(`/api/regenerate-image/${this.fileId}`, payload).subscribe({
+      next: (response) => {
+        img.generated_alt_text = response.generated_alt_text;
+        img.classification = response.classification;
         
-        // Optionally, auto-populate the user's editable textbox with the new result
-        img.userAltText = response.new_alt_text; 
-        
+        // Clear loading state on success
         img.isRegenerating = false;
-        this.cdr.detectChanges(); // Update UI to hide loading state
+        this.cdr.detectChanges();
       },
-      error: (err: HttpErrorResponse) => {
-        console.error('Failed to regenerate pipeline:', err);
-        alert(`Error regenerating pipeline: ${err.message || 'Check backend console.'}`);
+      error: (err) => {
+        console.error("Error regenerating alt text", err);
+        
+        // Clear loading state on error
         img.isRegenerating = false;
         this.cdr.detectChanges();
       }

@@ -24,6 +24,7 @@ from pptx.shapes.picture import Picture as PptxPicture
 import torch
 import numpy as np
 from transformers import AutoProcessor, PaliGemmaProcessor, PaliGemmaForConditionalGeneration
+import google.generativeai as genai
 
 # Local imports
 from src.pipelines.equation_pipeline import extract_equations_from_image, insert_equation_into_docx
@@ -205,7 +206,10 @@ def _get_combined_context(structured_context: Dict[str, Optional[str]]) -> str:
     parts = []
     if structured_context.get("doc_title"): parts.append(f"Document: {structured_context['doc_title']}")
     if structured_context.get("slide_title"): parts.append(f"Title: {structured_context['slide_title']}")
-    if structured_context.get("surrounding_text"): parts.append(f"Text: {structured_context['surrounding_text'][:300]}")
+    if structured_context.get("surrounding_text"): parts.append(f"Immediate Text: {structured_context['surrounding_text'][:300]}")
+    # --- ADDED RAG CONTEXT ---
+    if structured_context.get("broader_context"): parts.append(f"Broader Document Context: {structured_context['broader_context'][:500]}")
+    
     return ". ".join(filter(None, parts)) or "No context available."
 
 def create_tagging_prompt(structured_context, model_format="paligemma"):
@@ -235,12 +239,14 @@ def create_mathml_prompt(model_format="paligemma"):
 
 # --- Alt Text Pipeline ---
 
-def classify_and_generate_alt_text(image_bytes, structured_context, primary_model_system=None, ext=".pptx", existing_alt="", slide_num=None, task_idx=0):
+def classify_and_generate_alt_text(
+    image_bytes, structured_context, primary_model_system=None, 
+    ext=".pptx", existing_alt="", slide_num=None, task_idx=0,
+    provider="local", api_key=None
+):
     try:
         prompt_image_bytes = preprocess_image(image_bytes)
-    except ValueError as e:
-        if str(e) == "Unsupported image format":
-            return ["Needs Review"], "Unsupported image format (WMF/EMF) could not be converted for analysis.", ""
+    except Exception as e:
         return ["Needs Review"], f"Preprocessing error: {e}", ""
 
     alt_text = ""
@@ -249,65 +255,98 @@ def classify_and_generate_alt_text(image_bytes, structured_context, primary_mode
     complex_types = {"Graph", "Chart", "Map", "Table"}
     valid_map = {c.lower(): c for c in ["Graph", "Chart", "Map", "Diagram", "Table", "Photograph", "Text", "Screenshot", "Equation", "Other"]}
 
-    if primary_model_system and primary_model_system.get("model"):
+    # --- NEW GEMINI BRANCH ---
+    if provider == "gemini" and api_key:
         try:
-            model, processor = primary_model_system["model"], primary_model_system["processor"]
-            device = get_gpu_settings()["device"]
-            image = Image.open(io.BytesIO(prompt_image_bytes))
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel('gemini-2.5-flash')
+            image_pil = Image.open(io.BytesIO(prompt_image_bytes))
 
             # Pass 1: Tagging
-            p1 = create_tagging_prompt(structured_context, "paligemma")
-            inputs = processor(text=p1, images=image, return_tensors="pt").to(device)
-            with torch.inference_mode():
-                out = model.generate(**inputs, max_new_tokens=50)
-                gen_tags = processor.decode(out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True).strip()
-            
-            categories = [valid_map[t.strip().lower()] for t in gen_tags.split(',') if t.strip().lower() in valid_map] or ["Other"]
-            
-            # Pass 2: Branching for Alt Text
+            p1 = create_tagging_prompt(structured_context, "gemini").replace("<image>\n", "")
+            response1 = model.generate_content([p1, image_pil])
+            tag_text = re.sub(r"^(Category:|Answer:|Selected Categories:)\s*", "", response1.text, flags=re.IGNORECASE).strip()
+            categories = [valid_map[t.strip().lower()] for t in tag_text.split(',') if t.strip().lower() in valid_map] or ["Other"]
+
+            # Pass 2: Alt Text
             is_complex = any(c in complex_types for c in categories)
-            p2 = create_complex_data_alt_text_prompt(structured_context, categories, existing_alt, "paligemma") if is_complex else create_alt_text_prompt(structured_context, categories, existing_alt, "paligemma")
-            
-            inputs2 = processor(text=p2, images=image, return_tensors="pt").to(device)
-            with torch.inference_mode():
-                out2 = model.generate(**inputs2, max_new_tokens=250)
-                alt_text = processor.decode(out2[0][inputs2["input_ids"].shape[1]:], skip_special_tokens=True).strip()
+            p2 = create_complex_data_alt_text_prompt(structured_context, categories, existing_alt, "gemini") if is_complex else create_alt_text_prompt(structured_context, categories, existing_alt, "gemini")
+            p2 = p2.replace("<image>\n", "")
+            response2 = model.generate_content([p2, image_pil])
+            alt_text = response2.text
 
-            # Pass 3: MathML conversion if it's an Equation
+            # Pass 3: MathML
             if "Equation" in categories:
-                p3 = create_mathml_prompt("paligemma")
-                inputs3 = processor(text=p3, images=image, return_tensors="pt").to(device)
+                p3 = create_mathml_prompt("gemini").replace("<image>\n", "")
+                response3 = model.generate_content([p3, image_pil])
+                mathml = response3.text
+
+        except Exception as e:
+            logger.error(f"Gemini API failed for image {task_idx}: {e}")
+            alt_text = f"Gemini Error: {e}"
+            categories = ["Needs Review"]
+
+    # --- EXISTING LOCAL MODEL BRANCH ---
+    else:
+        if primary_model_system and primary_model_system.get("model"):
+            try:
+                model, processor = primary_model_system["model"], primary_model_system["processor"]
+                device = get_gpu_settings()["device"]
+                image = Image.open(io.BytesIO(prompt_image_bytes))
+
+                # Pass 1: Tagging
+                p1 = create_tagging_prompt(structured_context, "paligemma")
+                inputs = processor(text=p1, images=image, return_tensors="pt").to(device)
                 with torch.inference_mode():
-                    out3 = model.generate(**inputs3, max_new_tokens=500)
-                    mathml = processor.decode(out3[0][inputs3["input_ids"].shape[1]:], skip_special_tokens=True).strip()
-
-        except Exception as e:
-            logger.error(f"Primary model prompt failed for image {task_idx}: {e}")
-
-    # Fallback
-    if not alt_text:
-        try:
-            fb_info = get_fallback_model()
-            if fb_info and fb_info.get("model"):
-                from src.models.vision_processor import process_image as fb_process
+                    out = model.generate(**inputs, max_new_tokens=50)
+                    gen_tags = processor.decode(out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True).strip()
                 
-                # Tagging Fallback
-                p1_fb = create_tagging_prompt(structured_context, "smolvlm")
-                tag_fb = fb_process(prompt_image_bytes, p1_fb)
-                tag_fb = re.sub(r"^(Category:|Answer:|Selected Categories:)\s*", "", tag_fb, flags=re.IGNORECASE).strip()
-                categories = [valid_map[t.strip().lower()] for t in tag_fb.split(',') if t.strip().lower() in valid_map] or ["Other"]
+                categories = [valid_map[t.strip().lower()] for t in gen_tags.split(',') if t.strip().lower() in valid_map] or ["Other"]
                 
-                # Alt Text Fallback
+                # Pass 2: Branching for Alt Text
                 is_complex = any(c in complex_types for c in categories)
-                p2_fb = create_complex_data_alt_text_prompt(structured_context, categories, existing_alt, "smolvlm") if is_complex else create_alt_text_prompt(structured_context, categories, existing_alt, "smolvlm")
-                alt_text = fb_process(prompt_image_bytes, p2_fb)
+                p2 = create_complex_data_alt_text_prompt(structured_context, categories, existing_alt, "paligemma") if is_complex else create_alt_text_prompt(structured_context, categories, existing_alt, "paligemma")
+                
+                inputs2 = processor(text=p2, images=image, return_tensors="pt").to(device)
+                with torch.inference_mode():
+                    out2 = model.generate(**inputs2, max_new_tokens=250)
+                    alt_text = processor.decode(out2[0][inputs2["input_ids"].shape[1]:], skip_special_tokens=True).strip()
 
-                # MathML Fallback
-                if "Equation" in categories and not mathml:
-                    p3_fb = create_mathml_prompt("smolvlm")
-                    mathml = fb_process(prompt_image_bytes, p3_fb)
-        except Exception as e:
-            logger.error(f"Fallback prompt failed for image {task_idx}: {e}")
+                # Pass 3: MathML conversion if it's an Equation
+                if "Equation" in categories:
+                    p3 = create_mathml_prompt("paligemma")
+                    inputs3 = processor(text=p3, images=image, return_tensors="pt").to(device)
+                    with torch.inference_mode():
+                        out3 = model.generate(**inputs3, max_new_tokens=500)
+                        mathml = processor.decode(out3[0][inputs3["input_ids"].shape[1]:], skip_special_tokens=True).strip()
+
+            except Exception as e:
+                logger.error(f"Primary model prompt failed for image {task_idx}: {e}")
+
+        # Fallback
+        if not alt_text:
+            try:
+                fb_info = get_fallback_model()
+                if fb_info and fb_info.get("model"):
+                    from src.models.vision_processor import process_image as fb_process
+                    
+                    # Tagging Fallback
+                    p1_fb = create_tagging_prompt(structured_context, "smolvlm")
+                    tag_fb = fb_process(prompt_image_bytes, p1_fb)
+                    tag_fb = re.sub(r"^(Category:|Answer:|Selected Categories:)\s*", "", tag_fb, flags=re.IGNORECASE).strip()
+                    categories = [valid_map[t.strip().lower()] for t in tag_fb.split(',') if t.strip().lower() in valid_map] or ["Other"]
+                    
+                    # Alt Text Fallback
+                    is_complex = any(c in complex_types for c in categories)
+                    p2_fb = create_complex_data_alt_text_prompt(structured_context, categories, existing_alt, "smolvlm") if is_complex else create_alt_text_prompt(structured_context, categories, existing_alt, "smolvlm")
+                    alt_text = fb_process(prompt_image_bytes, p2_fb)
+
+                    # MathML Fallback
+                    if "Equation" in categories and not mathml:
+                        p3_fb = create_mathml_prompt("smolvlm")
+                        mathml = fb_process(prompt_image_bytes, p3_fb)
+            except Exception as e:
+                logger.error(f"Fallback prompt failed for image {task_idx}: {e}")
 
     # Final Post-processing
     alt_text = re.sub(r"^(Answer:|Alt Text:)\s*", "", alt_text, flags=re.IGNORECASE).strip()
@@ -351,10 +390,36 @@ def get_context_for_image_docx(doc: Document, inline_shape) -> Dict[str, Optiona
 
 # --- Main Entry Point ---
 
-def run_agent_pipeline(file_path, ext, progress_callback=None, **kwargs):
+def run_agent_pipeline(file_path, ext, progress_callback=None, provider="local", api_key=None, **kwargs):
     gpu_settings = get_gpu_settings()
     primary_model = get_primary_model()
     results = []
+    
+    # 1. --- BACKGROUND RAG INGESTION ---
+    text_rag = primary_model.get("text_rag")
+    if text_rag:
+        doc_texts = []
+        try:
+            if ext == ".docx":
+                doc_temp = Document(file_path)
+                for p in doc_temp.paragraphs:
+                    if p.text.strip(): doc_texts.append(p.text.strip())
+            elif ext == ".pptx":
+                pres_temp = Presentation(file_path)
+                for slide in pres_temp.slides:
+                    for shape in slide.shapes:
+                        if hasattr(shape, "text") and shape.text.strip():
+                            doc_texts.append(shape.text.strip())
+            
+            # Chunk and ingest
+            chunks = []
+            for text in doc_texts:
+                chunks.extend(chunk_text(text))
+            if chunks:
+                text_rag.add_documents(chunks)
+                logger.info(f"Ingested {len(chunks)} text chunks into RAG.")
+        except Exception as e:
+            logger.warning(f"Background RAG ingestion failed: {e}")
     
     try:
         if ext == ".pptx":
@@ -372,7 +437,16 @@ def run_agent_pipeline(file_path, ext, progress_callback=None, **kwargs):
                 try:
                     alt = getattr(getattr(shape, '_element', None).nvPicPr, 'cNvPr', {}).attrib.get('descr', '')
                     ctx = get_context_for_image_pptx(pres.slides[slide_num-1], shape)
-                    cats, gen_alt, _ = classify_and_generate_alt_text(shape.image.blob, ctx, primary_model, ext, alt, slide_num, i-1)
+                    
+                    # 2. --- BACKGROUND RAG QUERY (PPTX) ---
+                    if text_rag and ctx.get("surrounding_text"):
+                        rag_hits = text_rag.search(ctx["surrounding_text"], top_k=2)
+                        if rag_hits:
+                            ctx["broader_context"] = " ".join([hit['text'] for hit in rag_hits])
+                    cats, gen_alt, _ = classify_and_generate_alt_text(
+                        shape.image.blob, ctx, primary_model, ext, alt, slide_num, i-1,
+                        provider=provider, api_key=api_key
+                    )
                     
                     # --- TABLE PIPELINE INTEGRATION ---
                     if cats and cats[0] == "Table":
@@ -415,7 +489,16 @@ def run_agent_pipeline(file_path, ext, progress_callback=None, **kwargs):
                         
                         alt = shape._inline.find(qn('wp:docPr')).get('descr', '')
                         ctx = get_context_for_image_docx(doc, shape._inline)
-                        cats, gen_alt, _ = classify_and_generate_alt_text(image_bytes, ctx, primary_model, ext, alt, None, i-1)
+                    
+                        # 3. --- BACKGROUND RAG QUERY (DOCX) ---
+                        if text_rag and ctx.get("surrounding_text"):
+                            rag_hits = text_rag.search(ctx["surrounding_text"], top_k=2)
+                            if rag_hits:
+                                ctx["broader_context"] = " ".join([hit['text'] for hit in rag_hits])
+                        cats, gen_alt, _ = classify_and_generate_alt_text(
+                            shape.image.blob, ctx, primary_model, ext, alt, slide_num, i-1,
+                            provider=provider, api_key=api_key
+                        )
                         
                         # --- EQUATION PIPELINE INTEGRATION ---
                         if cats and cats[0] == "Equation":

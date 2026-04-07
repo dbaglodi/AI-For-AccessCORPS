@@ -2,9 +2,25 @@
   <h1>Document Remediation</h1>
 
   <!-- Upload Section -->
-  <div class="upload-section">
-    <input type="file" (change)="onFileSelected($event)" accept=".docx,.pptx" />
-    <button (click)="uploadFile()" [disabled]="!selectedFile">Upload</button>
+  <div class="upload-section" style="flex-direction: column; align-items: flex-start; gap: 10px;">
+    <div class="model-selection" style="display: flex; gap: 10px; width: 100%;">
+      <select [(ngModel)]="modelProvider"
+        style="padding: 0.5rem; border: 1px solid var(--border-color); border-radius: 4px;">
+        <option value="local">Local (Hugging Face)</option>
+        <option value="gemini">Google Gemini 2.5 Flash</option>
+      </select>
+  
+      <input type="password" *ngIf="modelProvider === 'gemini'" [(ngModel)]="geminiApiKey"
+        placeholder="Enter Gemini API Key"
+        style="padding: 0.5rem; border: 1px solid var(--border-color); border-radius: 4px; flex-grow: 1;" />
+    </div>
+  
+    <div style="display: flex; gap: 10px; width: 100%;">
+      <input type="file" (change)="onFileSelected($event)" accept=".docx,.pptx" />
+      <button (click)="uploadFile()" [disabled]="!selectedFile || (modelProvider === 'gemini' && !geminiApiKey)">
+        Upload
+      </button>
+    </div>
   </div>
 
   <!-- Error Display -->
@@ -119,6 +135,27 @@
                 <button type="button" class="secondary" (click)="clearAltText(i)" [disabled]="!img.userAltText">
                   Clear
                 </button>
+                <div class="regenerate-controls" style="display: flex; gap: 10px; align-items: center; margin-top: 10px;">
+                  <select [(ngModel)]="img.selectedPipeline" style="padding: 0.5rem; border-radius: 4px;">
+                    <option value="General">General</option>
+                    <option value="Table">Table</option>
+                    <option value="Equation">Equation</option>
+                  </select>
+
+                  <select [(ngModel)]="img.regenProvider" style="padding: 0.5rem; border-radius: 4px;">
+                    <option value="local">Local Model</option>
+                    <option value="gemini">Gemini API</option>
+                  </select>
+
+                  <button (click)="regeneratePipeline(img)" 
+                          [disabled]="img.regenProvider === 'gemini' && !geminiApiKey">
+                    Regenerate
+                  </button>
+                </div>
+
+                <div *ngIf="img.regenProvider === 'gemini' && !geminiApiKey" style="color: red; font-size: 0.8rem; margin-top: 5px;">
+                  Please enter your Gemini API Key in the upload section at the top.
+                </div>
               </div>
             </div>
           </div>

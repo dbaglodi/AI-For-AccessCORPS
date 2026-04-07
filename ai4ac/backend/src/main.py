@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Body, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Body, BackgroundTasks
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import shutil
@@ -38,6 +38,8 @@ class RegenerateRequest(BaseModel):
     forced_pipeline: str
     slide_num: Optional[int] = None
     rId: Optional[str] = None
+    provider: Optional[str] = "local"
+    api_key: Optional[str] = None
 
 @app.on_event("startup")
 def startup_event():
@@ -101,7 +103,12 @@ def get_simple_rag():
     except Exception as exc: logging.warning(f'Could not initialize SimpleRAG via agent_pipeline: {exc}'); return None
 
 @app.post("/upload")
-async def upload_file( background_tasks: BackgroundTasks, file: UploadFile = File(description="Document file to process"), ):
+async def upload_file( 
+    background_tasks: BackgroundTasks, 
+    file: UploadFile = File(description="Document file to process"),
+    provider: str = Form("local"),
+    api_key: Optional[str] = Form(None)
+):
     # (function remains the same)
     if not file: raise HTTPException(status_code=400, detail="No file uploaded")
     file_id = None
@@ -122,7 +129,7 @@ async def upload_file( background_tasks: BackgroundTasks, file: UploadFile = Fil
             processing_status[file_id].update({"status": "error", "error": str(e), "updated_at": datetime.now().isoformat()})
             raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
         finally: await file.close()
-        background_tasks.add_task(process_document, file_id, save_path, ext)
+        background_tasks.add_task(process_document, file_id, save_path, ext, provider, api_key)
         return {"file_id": file_id, "filename": file.filename}
     except HTTPException: raise
     except Exception as e:
@@ -130,7 +137,7 @@ async def upload_file( background_tasks: BackgroundTasks, file: UploadFile = Fil
             processing_status[file_id].update({"status": "error", "error": str(e), "updated_at": datetime.now().isoformat()})
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
-def process_document(file_id: str, save_path: str, ext: str):
+def process_document(file_id: str, save_path: str, ext: str, provider: str = "local", api_key: Optional[str] = None):
     # (function remains the same)
     try:
         processing_status[file_id].update({"current_step": "Extracting images/context", "progress": 30, "updated_at": datetime.now().isoformat()})
@@ -139,7 +146,8 @@ def process_document(file_id: str, save_path: str, ext: str):
         rag_strategy = os.environ.get('AGENT_RAG_STRATEGY', 'rag')
         results = run_agent_pipeline( save_path, ext,
             progress_callback=lambda step, prog, total: update_processing_status(file_id, step, prog, total),
-            partial_save_dir=partial_dir, rag_strategy=rag_strategy )
+            partial_save_dir=partial_dir, rag_strategy=rag_strategy,
+            provider=provider, api_key=api_key )
         with open(os.path.join(PROCESSED_DIR, f"{file_id}.json"), "w", encoding="utf-8") as f: json.dump(results, f)
         processing_status[file_id].update({"status": "completed", "progress": 100, "current_step": "Processing complete",
                                            "updated_at": datetime.now().isoformat()})
@@ -307,7 +315,19 @@ async def regenerate_image(file_id: str, req: RegenerateRequest):
             ctx = get_context_for_image_pptx(slide_target, target_shape)
             
         # Run generation forcing the user's selected pipeline tag
-        _, gen_alt, _ = classify_and_generate_alt_text(image_bytes, ctx, primary_model, ext, "", None, req.image_idx-1)
+        # Run generation forcing the user's selected pipeline tag AND provider
+        _, gen_alt, _ = classify_and_generate_alt_text(
+            image_bytes=image_bytes, 
+            structured_context=ctx, 
+            primary_model_system=primary_model, 
+            ext=ext, 
+            existing_alt="", 
+            slide_num=req.slide_num,   # <-- Safely passes None for DOCX
+            task_idx=req.image_idx-1,
+            provider=req.provider,     # <-- Route to Gemini or Local
+            api_key=req.api_key,       # <-- Pass the key
+            forced_pipeline=req.forced_pipeline # <-- Bypass Gemini's auto-tagging
+        )
         new_alt_text = gen_alt
         doc_modified = False
 
@@ -355,7 +375,19 @@ async def regenerate_image(file_id: str, req: RegenerateRequest):
                 
             # Force the categories list to start with the user's selected category
             forced_cats = [req.forced_pipeline]
-            _, gen_alt, _ = classify_and_generate_alt_text(image_bytes, ctx, primary_model, ext, "", None, req.image_idx-1)
+            # Run generation forcing the user's selected pipeline tag AND provider
+            _, gen_alt, _ = classify_and_generate_alt_text(
+                image_bytes=image_bytes, 
+                structured_context=ctx, 
+                primary_model_system=primary_model, 
+                ext=ext, 
+                existing_alt="", 
+                slide_num=req.slide_num,   # <-- Safely passes None for DOCX
+                task_idx=req.image_idx-1,
+                provider=req.provider,     # <-- Route to Gemini or Local
+                api_key=req.api_key,       # <-- Pass the key
+                forced_pipeline=req.forced_pipeline # <-- Bypass Gemini's auto-tagging
+            )
             new_alt_text = gen_alt
 
         # 4. Save document modifications (if equations/tables were inserted)
