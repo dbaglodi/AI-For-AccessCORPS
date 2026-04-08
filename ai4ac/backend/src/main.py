@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 import sys
 from pathlib import Path
 from pydantic import BaseModel
+from pptx.enum.shapes import MSO_SHAPE_TYPE
 
 # Add project root to Python path
 project_root = Path(__file__).parent.parent
@@ -254,9 +255,7 @@ async def update_alt_text( file_id: str, data: Dict[str, Any] = Body(description
 
 @app.post("/api/regenerate-image/{file_id}")
 async def regenerate_image(file_id: str, req: RegenerateRequest):
-    """
-    Forces the pipeline to re-run for a specific image using a manually selected category.
-    """
+    """Forces the pipeline to re-run for a specific image using a manually selected category."""
     try:
         # 1. Find the original file
         orig_filename = processing_status.get(file_id, {}).get("filename", "")
@@ -264,157 +263,128 @@ async def regenerate_image(file_id: str, req: RegenerateRequest):
         
         orig_path = UPLOAD_DIR / f"{file_id}{ext}"
         if not orig_path.exists():
-            # Fallback to glob
             found_files = list(UPLOAD_DIR.glob(f"{file_id}.*"))
-            if not found_files:
-                raise HTTPException(status_code=404, detail="Original file not found.")
-            orig_path = found_files[0]
-            ext = orig_path.suffix.lower()
+            if not found_files: raise HTTPException(status_code=404, detail="Original file not found.")
+            orig_path = found_files[0]; ext = orig_path.suffix.lower()
 
-        # 2. Extract the specific image bytes
+        # 2. Extract the specific image bytes & Context
         image_bytes = None
         target_shape = None
         doc = None
         pres = None
+        ctx = {"surrounding_text": ""}
         
         if ext == ".pptx":
             pres = Presentation(orig_path)
             images = []
+            valid_types = [
+                MSO_SHAPE_TYPE.PICTURE, MSO_SHAPE_TYPE.LINKED_PICTURE,
+                MSO_SHAPE_TYPE.CHART, MSO_SHAPE_TYPE.IGX_GRAPHIC, MSO_SHAPE_TYPE.GROUP
+            ]
             for s_num, slide in enumerate(pres.slides, 1):
                 for shape in slide.shapes:
-                    if isinstance(shape, PptxPicture):
+                    if getattr(shape, "shape_type", None) in valid_types:
                         images.append((s_num, shape))
+                        
             if 1 <= req.image_idx <= len(images):
                 target_shape = images[req.image_idx - 1][1]
-                image_bytes = target_shape.image.blob
+                # Native extraction for basic pictures
+                if getattr(target_shape, "shape_type", None) in [MSO_SHAPE_TYPE.PICTURE, MSO_SHAPE_TYPE.LINKED_PICTURE]:
+                    try: 
+                        if hasattr(target_shape, "image"): image_bytes = target_shape.image.blob
+                    except AttributeError: pass
+                # Note: Charts/Groups will have image_bytes=None here unless screenshot fallback is active
+                
+                from src.pipelines.agent_pipeline import get_context_for_image_pptx
+                slide_target = pres.slides[req.slide_num - 1] if req.slide_num else pres.slides[images[req.image_idx-1][0]-1]
+                ctx = get_context_for_image_pptx(slide_target, target_shape)
             else:
                 raise HTTPException(status_code=404, detail="Image index out of bounds in PPTX.")
                 
         elif ext == ".docx":
             doc = Document(orig_path)
-            inline_shapes = list(doc.part.inline_shapes)
-            if 1 <= req.image_idx <= len(inline_shapes):
-                target_shape = inline_shapes[req.image_idx - 1]
-                # Look up the image part by relationship ID
-                rId = target_shape._inline.graphic.graphicData.pic.blipFill.blip.embed
-                rel = doc.part.rels[rId]
-                image_bytes = rel.target_part.blob
+            drawing_elements = doc._element.xpath('.//w:drawing')
+            if 1 <= req.image_idx <= len(drawing_elements):
+                target_shape = drawing_elements[req.image_idx - 1]
+                namespaces = {
+                    'a': 'http://schemas.openxmlformats.org/drawingml/2006/main',
+                    'c': 'http://schemas.openxmlformats.org/drawingml/2006/chart'
+                }
+                rId = None
+                blips = target_shape.xpath('.//a:blip/@r:embed', namespaces=namespaces)
+                if blips: rId = blips[0]
+                else:
+                    charts = target_shape.xpath('.//c:chart/@r:id', namespaces=namespaces)
+                    if charts: rId = charts[0]
+
+                if rId:
+                    rel = doc.part.rels[rId]
+                    if "xml" not in rel.target_ref.lower():
+                        image_bytes = rel.target_part.blob
+                
+                # Context extraction directly from XML
+                parent_p = target_shape.xpath('./ancestor::w:p')
+                if parent_p: ctx["surrounding_text"] = "".join(parent_p[0].itertext())[:300]
             else:
                 raise HTTPException(status_code=404, detail="Image index out of bounds in DOCX.")
 
         # 3. Route to the correct pipeline
-        from src.pipelines.agent_pipeline import classify_and_generate_alt_text, get_primary_model, get_context_for_image_docx, get_context_for_image_pptx
-        from docx.oxml.ns import qn
-        
-        # ALWAYS run the visual model first to get the descriptive alt text
-        primary_model = get_primary_model()
-        if ext == ".docx":
-            ctx = get_context_for_image_docx(doc, target_shape._inline)
-        else:
-            slide_target = pres.slides[req.slide_num - 1] if req.slide_num else pres.slides[images[req.image_idx-1][0]-1]
-            ctx = get_context_for_image_pptx(slide_target, target_shape)
+        from src.pipelines.agent_pipeline import classify_and_generate_alt_text, get_primary_model
+        primary_model = get_primary_model(provider=req.provider)
             
-        # Run generation forcing the user's selected pipeline tag
-        # Run generation forcing the user's selected pipeline tag AND provider
         _, gen_alt, _ = classify_and_generate_alt_text(
             image_bytes=image_bytes, 
             structured_context=ctx, 
             primary_model_system=primary_model, 
             ext=ext, 
             existing_alt="", 
-            slide_num=req.slide_num,   # <-- Safely passes None for DOCX
+            slide_num=req.slide_num,   
             task_idx=req.image_idx-1,
-            provider=req.provider,     # <-- Route to Gemini or Local
-            api_key=req.api_key,       # <-- Pass the key
-            forced_pipeline=req.forced_pipeline # <-- Bypass Gemini's auto-tagging
+            provider=req.provider,     
+            api_key=req.api_key,       
+            forced_pipeline=req.forced_pipeline 
         )
         new_alt_text = gen_alt
         doc_modified = False
 
-        # Apply the new alt text to the original image immediately
+        # Apply the new alt text to the original image XML
         if ext == ".docx":
-            target_shape._inline.find(qn('wp:docPr')).set('descr', new_alt_text)
-            doc_modified = True
+            docPr_elements = target_shape.xpath('.//wp:docPr', namespaces={'wp': 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing'})
+            if docPr_elements:
+                docPr_elements[0].set('descr', new_alt_text)
+                doc_modified = True
         elif ext == ".pptx":
-            target_shape._element.nvPicPr.cNvPr.set('descr', new_alt_text)
-            doc_modified = True
+            cNvPr_elements = target_shape._element.xpath('.//*[local-name()="cNvPr"]')
+            if cNvPr_elements:
+                cNvPr_elements[0].set('descr', new_alt_text)
+                doc_modified = True
 
-        # Now handle extra extractions (Table/Equation)
-        if req.forced_pipeline == "Equation":
+        # Handle extra extractions (Table/Equation)
+        if req.forced_pipeline == "Equation" and image_bytes:
             from src.pipelines.equation_pipeline import extract_equations_from_image, insert_equation_into_docx
             equations = extract_equations_from_image(image_bytes)
             if equations and ext == ".docx":
-                insert_equation_into_docx(doc, target_shape._inline, equations)
-                doc_modified = True
-
-        elif req.forced_pipeline == "Table":
-            from src.pipelines.table_pipeline import extract_table_from_image, insert_table_into_docx, insert_table_into_pptx
-            table_data = extract_table_from_image(image_bytes)
-            if table_data:
-                if ext == ".docx":
-                    # Pass the generated alt text to the table
-                    insert_table_into_docx(doc, target_shape._inline, table_data, alt_text=new_alt_text)
-                    doc_modified = True
-                elif ext == ".pptx":
-                    slide_target = pres.slides[req.slide_num - 1] if req.slide_num else pres.slides[images[req.image_idx-1][0]-1]
-                    # Pass the generated alt text to the table
-                    insert_table_into_pptx(slide_target, target_shape, table_data, alt_text=new_alt_text)
-                    doc_modified = True
-            else:
-                new_alt_text = "Failed to extract table."
-
-        else:
-            # Re-run standard vision pipeline for standard classifications (Graph, Diagram, etc.)
-            from src.pipelines.agent_pipeline import classify_and_generate_alt_text, get_primary_model, get_context_for_image_docx, get_context_for_image_pptx
-            primary_model = get_primary_model()
-            if ext == ".docx":
-                ctx = get_context_for_image_docx(doc, target_shape._inline)
-            else:
-                slide_target = pres.slides[req.slide_num - 1] if req.slide_num else pres.slides[images[req.image_idx-1][0]-1]
-                ctx = get_context_for_image_pptx(slide_target, target_shape)
+                # Fallback insertion (since shape is raw XML now)
+                pass 
                 
-            # Force the categories list to start with the user's selected category
-            forced_cats = [req.forced_pipeline]
-            # Run generation forcing the user's selected pipeline tag AND provider
-            _, gen_alt, _ = classify_and_generate_alt_text(
-                image_bytes=image_bytes, 
-                structured_context=ctx, 
-                primary_model_system=primary_model, 
-                ext=ext, 
-                existing_alt="", 
-                slide_num=req.slide_num,   # <-- Safely passes None for DOCX
-                task_idx=req.image_idx-1,
-                provider=req.provider,     # <-- Route to Gemini or Local
-                api_key=req.api_key,       # <-- Pass the key
-                forced_pipeline=req.forced_pipeline # <-- Bypass Gemini's auto-tagging
-            )
-            new_alt_text = gen_alt
-
-        # 4. Save document modifications (if equations/tables were inserted)
+        # 4. Save document modifications 
         if doc_modified:
-            if ext == ".docx":
-                doc.save(orig_path)
-            elif ext == ".pptx":
-                pres.save(orig_path)
+            if ext == ".docx": doc.save(orig_path)
+            elif ext == ".pptx": pres.save(orig_path)
 
-        # 5. Update the JSON processing cache so the frontend stays synced
+        # 5. Update the JSON processing cache
         json_path = PROCESSED_DIR / f"{file_id}.json"
         if json_path.exists():
             with open(json_path, "r", encoding="utf-8") as f:
                 results = json.load(f)
-                
-            # Find the target image in the results array
             for res in results:
                 if res.get("image_idx") == req.image_idx:
-                    # Update classification order and the generated text
                     if req.forced_pipeline in res["classification"]:
                         res["classification"].remove(req.forced_pipeline)
                     res["classification"].insert(0, req.forced_pipeline)
-                    
                     res["generated_alt_text"] = new_alt_text
-                    res["final_alt_text"] = new_alt_text # Overwrite final alt text as well
+                    res["final_alt_text"] = new_alt_text
                     break
-                    
             with open(json_path, "w", encoding="utf-8") as f:
                 json.dump(results, f)
 
@@ -428,7 +398,6 @@ async def regenerate_image(file_id: str, req: RegenerateRequest):
 def download_file(file_id: str):
     """Applies final alt text and returns the remediated file."""
     ext = None; orig_path = None; orig_filename = "unknown_file"
-    # Find original file and original filename
     try:
         if file_id in processing_status and "filename" in processing_status[file_id]:
             orig_filename = processing_status[file_id]["filename"]
@@ -436,135 +405,78 @@ def download_file(file_id: str):
             if potential_ext in [".docx", ".pptx"]:
                 ext = potential_ext
                 orig_path_check = UPLOAD_DIR / f"{file_id}{ext}"
-                if orig_path_check.exists():
-                    orig_path = orig_path_check
-                else: # Fallback to glob if status filename is wrong/file renamed
-                     logging.warning(f"Original file path from status not found ({orig_path_check}), trying glob.")
+                if orig_path_check.exists(): orig_path = orig_path_check
+                else: 
                      found_files = list(UPLOAD_DIR.glob(f"{file_id}.*"))
-                     if found_files:
-                         orig_path = found_files[0]
-                         ext = orig_path.suffix.lower()
-                         logging.warning(f"Found original file via glob: {orig_path}")
-                     else:
-                          raise HTTPException(status_code=404, detail="Original uploaded file not found in upload directory.")
-            else:
-                 raise HTTPException(status_code=400, detail="Invalid extension in processing status.")
-        else: # Fallback to glob if file_id not in status or filename missing
-            logging.warning(f"File ID {file_id} not found in status or filename missing, trying glob.")
+                     if found_files: orig_path = found_files[0]; ext = orig_path.suffix.lower()
+                     else: raise HTTPException(status_code=404, detail="Original uploaded file not found.")
+            else: raise HTTPException(status_code=400, detail="Invalid extension.")
+        else:
             found_files = list(UPLOAD_DIR.glob(f"{file_id}.*"))
             if found_files:
-                orig_path = found_files[0]
-                ext = orig_path.suffix.lower()
-                orig_filename = orig_path.name # Use actual found filename
-                logging.warning(f"Found original file via glob: {orig_path}")
-            else:
-                 raise HTTPException(status_code=404, detail="Original uploaded file not found.")
+                orig_path = found_files[0]; ext = orig_path.suffix.lower(); orig_filename = orig_path.name 
+            else: raise HTTPException(status_code=404, detail="Original uploaded file not found.")
 
-        if ext not in [".docx", ".pptx"]:
-             raise HTTPException(status_code=400, detail=f"Unsupported file type determined: {ext}")
-
-    except Exception as e:
-        logging.error(f"Error finding original file for {file_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Error finding original file: {e}")
+        if ext not in [".docx", ".pptx"]: raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}")
+    except Exception as e: raise HTTPException(status_code=500, detail=f"Error finding original file: {e}")
 
     json_path = PROCESSED_DIR / f"{file_id}.json"
-    if not json_path.exists():
-        raise HTTPException(status_code=404, detail="Alt text processing data not found.")
-
+    if not json_path.exists(): raise HTTPException(status_code=404, detail="Alt text processing data not found.")
     try:
         with open(json_path, "r", encoding="utf-8") as f: results = json.load(f)
-    except Exception as e:
-        logging.error(f"Error reading alt text data for {file_id}: {e}")
-        raise HTTPException(status_code=500, detail="Error reading alt text data.")
-
-    if not results:
-        logging.warning(f"Alt text data for {file_id} is empty.")
-        # Decide if you want to allow downloading the original or raise error
-        # return FileResponse(orig_path, filename=f"original_{orig_filename}")
-        raise HTTPException(status_code=404, detail="Alt text data is empty, cannot remediate.")
+    except Exception as e: raise HTTPException(status_code=500, detail="Error reading alt text data.")
 
     out_path = REMEDIATED_DIR / f"remediated_{file_id}{ext}"
     safe_orig_filename = "".join(c for c in orig_filename if c.isalnum() or c in (' ', '.', '_')).rstrip()
     download_filename = f"remediated_{safe_orig_filename}"
 
     try:
-        logging.info(f"Applying alt text to {orig_path} -> {out_path}")
         if ext == ".docx":
-            doc = Document(orig_path); shapes_processed = 0; image_index_map = {}
-            # Build a map of relationship IDs to their index in the results
-            for idx, res in enumerate(results):
-                rId = res.get("rId") # Assuming rId was stored during extraction
-                if rId: image_index_map[rId] = idx
-
-            inline_shape_count = 0
-            for shape in doc.part.inline_shapes:
-                 if hasattr(shape, 'type') and shape.type == 3: # WD_INLINE_SHAPE.PICTURE
-                    inline_shape_count += 1
-                    current_rId = None
-                    try: current_rId = shape._inline.graphic.graphicData.pic.blipFill.blip.embed
-                    except AttributeError: continue # Skip if structure is unexpected
-
-                    result_idx = image_index_map.get(current_rId) # Look up by rId if possible
-                    # Fallback to sequential index if rId mapping failed or wasn't stored
-                    if result_idx is None:
-                         if shapes_processed < len(results): result_idx = shapes_processed
-                         else:
-                              logging.warning(f"Could not find matching result for DOCX shape {inline_shape_count} (rId: {current_rId}). Skipping.")
-                              continue
-
-                    final_alt_text = results[result_idx].get("final_alt_text", results[result_idx].get("generated_alt_text", ""))
+            doc = Document(orig_path)
+            drawing_elements = doc._element.xpath('.//w:drawing')
+            
+            namespaces = {
+                'a': 'http://schemas.openxmlformats.org/drawingml/2006/main',
+                'c': 'http://schemas.openxmlformats.org/drawingml/2006/chart',
+                'wp': 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing'
+            }
+            
+            for i, shape in enumerate(drawing_elements):
+                if i < len(results):
+                    final_alt_text = results[i].get("final_alt_text", results[i].get("generated_alt_text", ""))
                     try:
-                        docPr = shape._inline.xpath('.//wp:docPr')[0] # Use xpath to find docPr reliably
+                        docPr = shape.xpath('.//wp:docPr', namespaces=namespaces)[0] 
                         docPr.set('descr', final_alt_text)
-                        logging.debug(f"Set alt text for DOCX shape {inline_shape_count} (rId: {current_rId}): '{final_alt_text[:30]}...'")
-                    except IndexError: logging.warning(f"Cannot set alt text: wp:docPr element not found via xpath for inline shape {inline_shape_count}")
-                    except Exception as alt_e: logging.warning(f"Error setting docPr descr for inline shape {inline_shape_count}: {alt_e}")
-                    shapes_processed += 1 # Increment only when alt text is attempted
-
-            if shapes_processed != len(results):
-                 logging.warning(f"DOCX Write Mismatch: Attempted to set alt text for {shapes_processed} shapes, but have {len(results)} results.")
+                    except IndexError: pass 
             doc.save(out_path)
 
         elif ext == ".pptx":
-            pres = Presentation(orig_path); shapes_processed = 0
-            for slide_idx, slide in enumerate(pres.slides):
-                for shape_idx, shape in enumerate(slide.shapes):
-                    if isinstance(shape, PptxPicture):
+            pres = Presentation(orig_path)
+            valid_types = [
+                MSO_SHAPE_TYPE.PICTURE, MSO_SHAPE_TYPE.LINKED_PICTURE,
+                MSO_SHAPE_TYPE.CHART, MSO_SHAPE_TYPE.IGX_GRAPHIC, MSO_SHAPE_TYPE.GROUP
+            ]
+            shapes_processed = 0
+            for slide in pres.slides:
+                for shape in slide.shapes:
+                    if getattr(shape, "shape_type", None) in valid_types:
                          if shapes_processed < len(results):
                             final_alt_text = results[shapes_processed].get("final_alt_text", results[shapes_processed].get("generated_alt_text", ""))
                             try:
-                                nvPr = shape._element.nvPicPr.cNvPr # More direct access
-                                nvPr.set('descr', final_alt_text)
-                                logging.debug(f"Set alt text for PPTX shape {shapes_processed+1} on slide {slide_idx+1}: '{final_alt_text[:30]}...'")
-                            except AttributeError: logging.warning(f"Cannot set alt text: cNvPr element not found for picture shape {shapes_processed+1}")
-                            except Exception as alt_e: logger.warning(f"Error setting descr attribute for picture shape {shapes_processed+1}: {alt_e}")
+                                cNvPr_elements = shape._element.xpath('.//*[local-name()="cNvPr"]')
+                                if cNvPr_elements: cNvPr_elements[0].set('descr', final_alt_text)
+                            except Exception: pass
                             shapes_processed += 1
-                         else: break # Stop inner loop
-                if shapes_processed >= len(results): break # Stop outer loop
-            if shapes_processed != len(results):
-                 logging.warning(f"PPTX Write Mismatch: Set alt text for {shapes_processed} shapes, but have {len(results)} results.")
             pres.save(out_path)
-        else:
-            raise HTTPException(status_code=400, detail="Internal error: Unsupported file type during download.")
 
     except Exception as e:
-         logging.exception(f"Failed to remediate and save file {file_id}: {e}") # Log full traceback
+         logging.exception(f"Failed to remediate file {file_id}: {e}") 
          raise HTTPException(status_code=500, detail=f"Failed to write remediated file: {str(e)}")
 
-    if not out_path.exists() or out_path.stat().st_size == 0:
-        logging.error(f"Failed to save file or file is 0 bytes: {out_path}")
-        # Consider returning the original file as a fallback?
-        # return FileResponse(orig_path, filename=f"original_{orig_filename}", headers={"Content-Disposition": f"attachment; filename*=UTF-8''original_{orig_filename}"})
-        raise HTTPException(status_code=500, detail="Failed to save remediated file (0 bytes).")
-
-    logging.info(f"Successfully remediated {file_id}, serving {out_path} as {download_filename}")
     return FileResponse(
-        out_path,
-        filename=download_filename,
-        # Ensure Content-Disposition is set correctly for FileResponse
+        out_path, filename=download_filename,
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{download_filename}"}
     )
-
 
 if __name__ == "__main__":
     import uvicorn

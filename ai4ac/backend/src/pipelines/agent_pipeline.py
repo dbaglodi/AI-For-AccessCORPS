@@ -21,6 +21,7 @@ from docx.oxml.ns import nsdecls, qn
 from pptx import Presentation
 from pptx.slide import Slide as PptxSlide 
 from pptx.shapes.picture import Picture as PptxPicture
+from pptx.enum.shapes import MSO_SHAPE_TYPE
 import torch
 import numpy as np
 from transformers import AutoProcessor, PaliGemmaProcessor, PaliGemmaForConditionalGeneration
@@ -172,12 +173,23 @@ def preprocess_image(image_bytes: bytes, max_size: int = 512) -> bytes:
         raise e
 
 # --- Model Loading ---
-
-def get_primary_model(logger_instance=None):
+def get_primary_model(provider="local", logger_instance=None):
     global _primary_model_cache
+    log = logger_instance or logger
+
+    # 1. LAZY LOADING INTERCEPT: If Gemini, return None immediately without locking or loading!
+    if provider == "gemini":
+        log.info("Gemini provider selected. Bypassing local model load.")
+        return None 
+
+    # 2. Local Model Loading (with existing thread lock)
     with _primary_model_lock:
-        if _primary_model_cache: return _primary_model_cache
-        log = logger_instance or logger
+        # If it was already loaded by a previous request, return it instantly
+        if _primary_model_cache: 
+            return _primary_model_cache
+            
+        # Otherwise, this is the Cold Start
+        log.info("First request for local model detected. Downloading/Loading weights into VRAM now...")
         gpu_settings = get_gpu_settings()
         primary_model_id = "google/paligemma-3b-mix-448"
         try:
@@ -189,12 +201,15 @@ def get_primary_model(logger_instance=None):
                 attn_implementation="eager",
                 cache_dir=CUSTOM_CACHE_DIR
             ).to(gpu_settings["device"])
+            
             _primary_model_cache = {
-                "model": model, "processor": processor,
+                "model": model, 
+                "processor": processor,
                 "text_rag": LangChainRAG() if LANGCHAIN_AVAILABLE else SimpleTextRAG(),
                 "type": "vision_model_paligemma"
             }
             return _primary_model_cache
+            
         except Exception as e:
             log.error(f"Primary model load failed: {e}")
             _primary_model_cache = {"model": None, "processor": None, "text_rag": SimpleTextRAG(), "type": "failed"}
@@ -242,7 +257,7 @@ def create_mathml_prompt(model_format="paligemma"):
 def classify_and_generate_alt_text(
     image_bytes, structured_context, primary_model_system=None, 
     ext=".pptx", existing_alt="", slide_num=None, task_idx=0,
-    provider="local", api_key=None
+    provider="local", api_key=None, forced_pipeline=None # <--- ADD THIS HERE
 ):
     try:
         prompt_image_bytes = preprocess_image(image_bytes)
@@ -259,14 +274,18 @@ def classify_and_generate_alt_text(
     if provider == "gemini" and api_key:
         try:
             genai.configure(api_key=api_key)
-            model = genai.GenerativeModel('gemini-2.5-flash')
+            model = genai.GenerativeModel('gemini-2.5-flash-lite')
             image_pil = Image.open(io.BytesIO(prompt_image_bytes))
 
-            # Pass 1: Tagging
-            p1 = create_tagging_prompt(structured_context, "gemini").replace("<image>\n", "")
-            response1 = model.generate_content([p1, image_pil])
-            tag_text = re.sub(r"^(Category:|Answer:|Selected Categories:)\s*", "", response1.text, flags=re.IGNORECASE).strip()
-            categories = [valid_map[t.strip().lower()] for t in tag_text.split(',') if t.strip().lower() in valid_map] or ["Other"]
+            # --- NEW OVERRIDE LOGIC ---
+            if forced_pipeline and forced_pipeline.lower() != "general":
+                categories = [forced_pipeline]
+                logger.info(f"Bypassing Gemini classification. User forced pipeline: {forced_pipeline}")
+            else:
+                p1 = create_tagging_prompt(structured_context, "gemini").replace("<image>\n", "")
+                response1 = model.generate_content([p1, image_pil])
+                tag_text = re.sub(r"^(Category:|Answer:|Selected Categories:)\s*", "", response1.text, flags=re.IGNORECASE).strip()
+                categories = [valid_map[t.strip().lower()] for t in tag_text.split(',') if t.strip().lower() in valid_map] or ["Other"]
 
             # Pass 2: Alt Text
             is_complex = any(c in complex_types for c in categories)
@@ -363,7 +382,7 @@ def classify_and_generate_alt_text(
         alt_text = existing_alt or f"Image {task_idx+1}"
         if "Needs Review" not in categories: categories.append("Needs Review")
 
-    return categories, alt_text[:150], mathml
+    return categories, alt_text, mathml
 
 # --- Context Extraction ---
 
@@ -392,11 +411,11 @@ def get_context_for_image_docx(doc: Document, inline_shape) -> Dict[str, Optiona
 
 def run_agent_pipeline(file_path, ext, progress_callback=None, provider="local", api_key=None, **kwargs):
     gpu_settings = get_gpu_settings()
-    primary_model = get_primary_model()
+    primary_model = get_primary_model(provider=provider)
     results = []
     
     # 1. --- BACKGROUND RAG INGESTION ---
-    text_rag = primary_model.get("text_rag")
+    text_rag = primary_model.get("text_rag") if primary_model else None
     if text_rag:
         doc_texts = []
         try:
@@ -425,26 +444,57 @@ def run_agent_pipeline(file_path, ext, progress_callback=None, provider="local",
         if ext == ".pptx":
             pres = Presentation(file_path)
             images = []
-            pres_modified = False # <--- Track PPTX changes
+            pres_modified = False 
             
+            # 1. Use the expanded list to find all visual data
+            valid_types = [
+                MSO_SHAPE_TYPE.PICTURE, 
+                MSO_SHAPE_TYPE.LINKED_PICTURE,
+                MSO_SHAPE_TYPE.CHART, 
+                MSO_SHAPE_TYPE.IGX_GRAPHIC, # SmartArt
+                MSO_SHAPE_TYPE.GROUP
+            ]
+
             for slide_num, slide in enumerate(pres.slides, 1):
                 for shape in slide.shapes:
-                    if isinstance(shape, PptxPicture):
+                    if getattr(shape, "shape_type", None) in valid_types:
                         images.append((slide_num, shape))
             
             total_count = len(images)
             for i, (slide_num, shape) in enumerate(images, 1):
                 try:
-                    alt = getattr(getattr(shape, '_element', None).nvPicPr, 'cNvPr', {}).attrib.get('descr', '')
+                    # 2. Safely get existing alt text for any shape type using XPath
+                    alt = ""
+                    cNvPr_elements = shape._element.xpath('.//*[local-name()="cNvPr"]')
+                    if cNvPr_elements:
+                        alt = cNvPr_elements[0].get('descr', '')
+
                     ctx = get_context_for_image_pptx(pres.slides[slide_num-1], shape)
                     
-                    # 2. --- BACKGROUND RAG QUERY (PPTX) ---
+                    # 3. Safely extract image bytes (Handle Charts/Groups)
+                    image_bytes = None
+                    if getattr(shape, "shape_type", None) in [MSO_SHAPE_TYPE.PICTURE, MSO_SHAPE_TYPE.LINKED_PICTURE]:
+                        try:
+                            if hasattr(shape, "image"): image_bytes = shape.image.blob
+                        except AttributeError: pass
+
+                    if image_bytes is None:
+                        # FALLBACK: Port your Colab's screenshot-and-crop logic here!
+                        # Because this is the backend, if you haven't brought over the 
+                        # pdf2image / libreoffice slide screenshot function yet, 
+                        # we must log a warning and skip to avoid crashing the server.
+                        logger.warning(f"Shape {i} (Type {shape.shape_type}) requires slide cropping. Ensure screenshot function is implemented.")
+                        continue # Remove this continue once your slide screenshot function is ported
+
+                    # --- BACKGROUND RAG QUERY (PPTX) ---
                     if text_rag and ctx.get("surrounding_text"):
                         rag_hits = text_rag.search(ctx["surrounding_text"], top_k=2)
                         if rag_hits:
                             ctx["broader_context"] = " ".join([hit['text'] for hit in rag_hits])
+                    
+                    # Call Gemini / Local Model
                     cats, gen_alt, _ = classify_and_generate_alt_text(
-                        shape.image.blob, ctx, primary_model, ext, alt, slide_num, i-1,
+                        image_bytes, ctx, primary_model, ext, alt, slide_num, i-1,
                         provider=provider, api_key=api_key
                     )
                     

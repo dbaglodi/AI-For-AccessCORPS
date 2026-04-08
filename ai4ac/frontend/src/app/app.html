@@ -82,80 +82,38 @@
             </div>
 
             <div class="meta-row">
-              <!-- --- START MODIFICATION: Remove Short Description Display --- -->
-              <!--
-              <div class="old-alt"><label>AI Short Description:</label>
-                <div class="old-alt-text">{{ img.short_description || '—' }}</div>
-              </div>
-              -->
-              <!-- --- END MODIFICATION --- -->
               <div class="old-alt"><label>Original Alt Text:</label>
                 <div class="old-alt-text">{{ img.alt_text || '—' }}</div>
               </div>
-              <!-- --- START MODIFICATION: Fix tags ngIf/ngFor --- -->
-              <div class="tags-container pipeline-controls" *ngIf="img.classification?.length">
-                <select [(ngModel)]="img.classification[0]" class="tag-dropdown">
-                  
-                  <option *ngIf="!availableTags.includes(img.classification[0])" [value]="img.classification[0]">
-                    {{ img.classification[0] }}
-                  </option>
-                  
-                  <option *ngFor="let tag of availableTags" [value]="tag">
-                    {{ tag }}
-                  </option>
-                  
+              
+              <div class="pipeline-controls" style="display: flex; gap: 10px; align-items: center; margin-top: 10px; flex-wrap: wrap; background: var(--background-light); padding: 10px; border-radius: 4px;">
+                <label style="font-weight: bold; font-size: 0.9em;">Pipeline Override:</label>
+                <select [(ngModel)]="img.selectedPipeline" style="padding: 0.4rem; border-radius: 4px; border: 1px solid var(--border-color);">
+                  <option *ngIf="img.classification?.length" [value]="img.classification[0]">Keep: {{ img.classification[0] }}</option>
+                  <option value="General">General Photo</option>
+                  <option value="Table">Data Table</option>
+                  <option value="Equation">Math Equation</option>
                 </select>
 
-                <button 
-                  class="btn-regenerate" 
-                  (click)="regeneratePipeline(img)" 
-                  [disabled]="img.isRegenerating">
-                  
+                <button class="primary" (click)="regeneratePipeline(img)" [disabled]="img.isRegenerating || (modelProvider === 'gemini' && !geminiApiKey)">
                   <span *ngIf="!img.isRegenerating">Regenerate</span>
                   <span *ngIf="img.isRegenerating">Processing...</span>
                 </button>
+                
+                <div *ngIf="modelProvider === 'gemini' && !geminiApiKey" style="color: var(--danger-color); font-size: 0.8rem; width: 100%;">
+                  Please enter your Gemini API Key in the upload section at the top.
+                </div>
               </div>
-              <!-- --- END MODIFICATION --- -->
             </div>
 
             <div class="alt-text-section">
               <label [for]="'alt-text-' + i">Generated Alt Text (Editable)</label>
               <textarea [id]="'alt-text-' + i" class="alt-text-input" [(ngModel)]="img.userAltText"
-                [name]="'altText' + i" rows="3" placeholder="Enter alt text description">
-              </textarea>
+                [name]="'altText' + i" rows="3" placeholder="Enter alt text description"></textarea>
               <div class="alt-text-actions">
-                <button type="button" class="secondary" (click)="acceptSuggestedAltText(i)"
-                  [disabled]="img.userAltText === img.generated_alt_text">
-                  Revert to Generated
-                </button>
-                <button type="button" class="secondary" (click)="revertToOriginalAltText(i)"
-                  [disabled]="img.userAltText === (img.alt_text || '')">
-                  Revert to Original
-                </button>
-                <button type="button" class="secondary" (click)="clearAltText(i)" [disabled]="!img.userAltText">
-                  Clear
-                </button>
-                <div class="regenerate-controls" style="display: flex; gap: 10px; align-items: center; margin-top: 10px;">
-                  <select [(ngModel)]="img.selectedPipeline" style="padding: 0.5rem; border-radius: 4px;">
-                    <option value="General">General</option>
-                    <option value="Table">Table</option>
-                    <option value="Equation">Equation</option>
-                  </select>
-
-                  <select [(ngModel)]="img.regenProvider" style="padding: 0.5rem; border-radius: 4px;">
-                    <option value="local">Local Model</option>
-                    <option value="gemini">Gemini API</option>
-                  </select>
-
-                  <button (click)="regeneratePipeline(img)" 
-                          [disabled]="img.regenProvider === 'gemini' && !geminiApiKey">
-                    Regenerate
-                  </button>
-                </div>
-
-                <div *ngIf="img.regenProvider === 'gemini' && !geminiApiKey" style="color: red; font-size: 0.8rem; margin-top: 5px;">
-                  Please enter your Gemini API Key in the upload section at the top.
-                </div>
+                <button type="button" class="secondary" (click)="acceptSuggestedAltText(i)" [disabled]="img.userAltText === img.generated_alt_text">Revert to Generated</button>
+                <button type="button" class="secondary" (click)="revertToOriginalAltText(i)" [disabled]="img.userAltText === (img.alt_text || '')">Revert to Original</button>
+                <button type="button" class="secondary" (click)="clearAltText(i)" [disabled]="!img.userAltText">Clear</button>
               </div>
             </div>
           </div>

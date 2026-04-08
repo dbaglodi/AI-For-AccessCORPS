@@ -354,46 +354,44 @@ export class AppComponent implements OnDestroy, AfterViewInit {
   regeneratePipeline(img: any) {
     if (!img) return;
 
-    // 1. Your original error check
     if (!this.fileId) {
       console.error("Cannot regenerate: No file ID found.");
       return;
     }
 
-    // 2. Your original UI loading state
     img.isRegenerating = true;
     this.cdr.detectChanges(); // Force UI to show loading state
 
-    // 3. Capture the pipeline (fallback to original classification if they didn't touch the dropdown)
     const selectedPipeline = img.selectedPipeline || img.classification[0];
 
-    // 4. Determine which model provider they selected on this specific card
-    const providerToUse = img.regenProvider || 'local'; 
+    // Read the GLOBAL component state instead of the card state
+    const providerToUse = this.modelProvider || 'local'; 
 
-    // 5. Build the complete payload
     const payload = {
       image_idx: img.image_idx,
       forced_pipeline: selectedPipeline,
       slide_num: img.slide_num, 
       rId: img.rId,
-      provider: providerToUse,
+      provider: providerToUse, // Sends whatever the top dropdown is set to
       api_key: providerToUse === 'gemini' ? this.geminiApiKey : null
     };
 
-    // 6. Make the HTTP Request
     this.http.post<any>(`/api/regenerate-image/${this.fileId}`, payload).subscribe({
       next: (response) => {
-        img.generated_alt_text = response.generated_alt_text;
-        img.classification = response.classification;
+        img.generated_alt_text = response.new_alt_text || response.generated_alt_text; // Ensure we grab new_alt_text 
         
-        // Clear loading state on success
+        // Update the classification array to show the new forced pipeline first
+        if (img.classification && response.pipeline_used) {
+            const index = img.classification.indexOf(response.pipeline_used);
+            if (index > -1) img.classification.splice(index, 1);
+            img.classification.unshift(response.pipeline_used);
+        }
+        
         img.isRegenerating = false;
         this.cdr.detectChanges();
       },
       error: (err) => {
         console.error("Error regenerating alt text", err);
-        
-        // Clear loading state on error
         img.isRegenerating = false;
         this.cdr.detectChanges();
       }
