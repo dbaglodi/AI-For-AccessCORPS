@@ -56,26 +56,15 @@ def get_table_models():
 
 
 def _get_cell_text(img: Image.Image, bbox: list[float]) -> str:
-    if not TESSERACT_AVAILABLE:
-        return ""
+    if not TESSERACT_AVAILABLE: return ""
     x0, y0, x1, y1 = [int(v) for v in bbox]
-    x0, y0 = max(0, x0 - 2), max(0, y0 - 2)
-    x1, y1 = min(img.width, x1 + 2), min(img.height, y1 + 2)
     
-    # Add these temporarily
-    logger.info(f"Cropping cell: ({x0},{y0}) -> ({x1},{y1}) from image size {img.size}")
-    
-    if x1 <= x0 or y1 <= y0:
-        logger.warning("Cell crop has zero or negative dimensions — skipping")
-        return ""
+    if x1 <= x0 or y1 <= y0: return ""
     
     cell_img = img.crop((x0, y0, x1, y1))
     
-    # Save first few crops to inspect visually
-    cell_img.save(f"/tmp/debug_cell_{x0}_{y0}.png")
-    
+    # REMOVED: cell_img.save(f"/tmp/debug_cell_{x0}_{y0}.png") <-- This causes backend crashes
     text = pytesseract.image_to_string(cell_img, config="--psm 7").strip()
-    logger.info(f"OCR result: '{text}'")
     return text
 
 
@@ -162,8 +151,18 @@ def extract_table_from_image(image_bytes: bytes) -> list[list[str]]:
                     if x1 > x0 and y1 > y0:
                         cell_boxes.append([x0, y0, x1, y1])
 
-        # Pass img_resized so OCR crops align with detected boxes
-        grid = _boxes_to_grid(row_boxes, col_boxes, cell_boxes, img_resized)
+       # NEW: Calculate scaling factors
+        orig_w, orig_h = img_original.size
+        scale_x = orig_w / 800.0
+        scale_y = orig_h / 800.0
+
+        # NEW: Scale boxes back to original aspect ratio
+        row_boxes = [[b[0]*scale_x, b[1]*scale_y, b[2]*scale_x, b[3]*scale_y] for b in row_boxes]
+        col_boxes = [[b[0]*scale_x, b[1]*scale_y, b[2]*scale_x, b[3]*scale_y] for b in col_boxes]
+        cell_boxes = [[b[0]*scale_x, b[1]*scale_y, b[2]*scale_x, b[3]*scale_y] for b in cell_boxes]
+
+        # Pass img_original instead of img_resized for OCR quality
+        grid = _boxes_to_grid(row_boxes, col_boxes, cell_boxes, img_original)
         return grid
 
     except Exception as e:
@@ -217,36 +216,6 @@ def _extract_table_with_paligemma(image_bytes: bytes) -> list[list[str]]:
         logger.error(f"PaliGemma table fallback failed: {e}")
         return []
 
-def insert_table_into_docx(doc, inline_shape_element, table_data: list[list[str]], alt_text: str = ""):
-    if not table_data or not table_data[0]:
-        return
-
-    target_paragraph = None
-    for p in doc.paragraphs:
-        if inline_shape_element in p._element.xpath('.//wp:inline'):
-            target_paragraph = p
-            break
-
-    if target_paragraph:
-        rows = len(table_data)
-        cols = max(len(row) for row in table_data)
-        table = doc.add_table(rows=rows, cols=cols)
-        table.style = 'Table Grid'
-        
-        for r, row_data in enumerate(table_data):
-            for c, cell_text in enumerate(row_data):
-                if c < cols:
-                    table.cell(r, c).text = str(cell_text)
-                    
-        # --- NEW: Apply Alt Text to the Word Table ---
-        if alt_text:
-            tblDescr = OxmlElement('w:tblDescription')
-            tblDescr.set(qn('w:val'), alt_text)
-            table._tbl.tblPr.append(tblDescr)
-        # ---------------------------------------------
-            
-        target_paragraph._p.addnext(table._tbl)
-
 def insert_table_into_pptx(slide, image_shape, table_data: list[list[str]], alt_text: str = ""):
     if not table_data or not table_data[0]:
         return
@@ -275,3 +244,33 @@ def insert_table_into_pptx(slide, image_shape, table_data: list[list[str]], alt_
 
     spTree = slide.shapes._spTree
     spTree.insert(spTree.index(image_shape._element), table_shape._element)
+
+def insert_table_into_docx(doc, shape_element, table_data: list[list[str]], alt_text: str = ""):
+    if not table_data or not table_data[0]:
+        return
+
+    # Use XPath to directly find the paragraph containing this image
+    parent_p = shape_element.xpath('./ancestor::w:p')
+    if not parent_p:
+        return
+        
+    target_xml_p = parent_p[0]
+
+    rows = len(table_data)
+    cols = max(len(row) for row in table_data)
+    table = doc.add_table(rows=rows, cols=cols)
+    table.style = 'Table Grid'
+    
+    for r, row_data in enumerate(table_data):
+        for c, cell_text in enumerate(row_data):
+            if c < cols:
+                table.cell(r, c).text = str(cell_text)
+                
+    # Apply Alt Text to the Word Table
+    if alt_text:
+        tblDescr = OxmlElement('w:tblDescription')
+        tblDescr.set(qn('w:val'), alt_text)
+        table._tbl.tblPr.append(tblDescr)
+        
+    # Insert the table immediately after the paragraph containing the image
+    target_xml_p.addnext(table._tbl)

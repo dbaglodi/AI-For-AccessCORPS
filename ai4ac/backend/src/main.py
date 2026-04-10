@@ -432,23 +432,47 @@ def download_file(file_id: str):
 
     try:
         if ext == ".docx":
-            doc = Document(orig_path)
-            drawing_elements = doc._element.xpath('.//w:drawing')
+            import zipfile
+            from lxml import etree
+            import tempfile
             
-            namespaces = {
-                'a': 'http://schemas.openxmlformats.org/drawingml/2006/main',
-                'c': 'http://schemas.openxmlformats.org/drawingml/2006/chart',
-                'wp': 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing'
-            }
-            
-            for i, shape in enumerate(drawing_elements):
-                if i < len(results):
-                    final_alt_text = results[i].get("final_alt_text", results[i].get("generated_alt_text", ""))
-                    try:
-                        docPr = shape.xpath('.//wp:docPr', namespaces=namespaces)[0] 
-                        docPr.set('descr', final_alt_text)
-                    except IndexError: pass 
-            doc.save(out_path)
+            temp_dir = tempfile.mkdtemp()
+            try:
+                # 1. Unzip the docx exactly like the notebook
+                with zipfile.ZipFile(orig_path, 'r') as docx_zip:
+                    docx_zip.extractall(temp_dir)
+
+                document_xml_path = os.path.join(temp_dir, 'word', 'document.xml')
+                tree = etree.parse(document_xml_path)
+                root = tree.getroot()
+
+                namespaces = {
+                    'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main',
+                    'wp': 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing'
+                }
+                
+                # 2. Iterate through drawings and apply alt text
+                drawings = root.xpath('.//w:drawing', namespaces=namespaces)
+                for i, drawing in enumerate(drawings):
+                    if i < len(results):
+                        final_alt_text = results[i].get("final_alt_text", results[i].get("generated_alt_text", ""))
+                        docPr_elements = drawing.xpath('.//wp:docPr', namespaces=namespaces)
+                        if docPr_elements:
+                            docPr_elements[0].set('descr', final_alt_text)
+
+                # 3. Save modified XML
+                tree.write(document_xml_path, encoding='UTF-8', xml_declaration=True)
+
+                # 4. Re-zip into the remediated directory
+                with zipfile.ZipFile(out_path, 'w') as outzip:
+                    for root_dir, _, files in os.walk(temp_dir):
+                        for file in files:
+                            file_path = os.path.join(root_dir, file)
+                            arcname = os.path.relpath(file_path, temp_dir)
+                            outzip.write(file_path, arcname)
+            finally:
+                import shutil
+                shutil.rmtree(temp_dir)
 
         elif ext == ".pptx":
             pres = Presentation(orig_path)

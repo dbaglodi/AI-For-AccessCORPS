@@ -270,43 +270,59 @@ def classify_and_generate_alt_text(
     complex_types = {"Graph", "Chart", "Map", "Table"}
     valid_map = {c.lower(): c for c in ["Graph", "Chart", "Map", "Diagram", "Table", "Photograph", "Text", "Screenshot", "Equation", "Other"]}
 
-    # --- NEW GEMINI BRANCH ---
+    gemini_success = False
+
+    # --- NEW GEMINI BRANCH WITH 3 RETRIES ---
     if provider == "gemini" and api_key:
-        try:
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel('gemini-2.5-flash-lite')
-            image_pil = Image.open(io.BytesIO(prompt_image_bytes))
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                genai.configure(api_key=api_key)
+                model = genai.GenerativeModel('gemini-2.5-flash-lite')
+                image_pil = Image.open(io.BytesIO(prompt_image_bytes))
 
-            # --- NEW OVERRIDE LOGIC ---
-            if forced_pipeline and forced_pipeline.lower() != "general":
-                categories = [forced_pipeline]
-                logger.info(f"Bypassing Gemini classification. User forced pipeline: {forced_pipeline}")
-            else:
-                p1 = create_tagging_prompt(structured_context, "gemini").replace("<image>\n", "")
-                response1 = model.generate_content([p1, image_pil])
-                tag_text = re.sub(r"^(Category:|Answer:|Selected Categories:)\s*", "", response1.text, flags=re.IGNORECASE).strip()
-                categories = [valid_map[t.strip().lower()] for t in tag_text.split(',') if t.strip().lower() in valid_map] or ["Other"]
+                # Pass 1: Tagging or Override
+                if forced_pipeline and forced_pipeline.lower() != "general":
+                    categories = [forced_pipeline]
+                    logger.info(f"Bypassing Gemini classification. User forced pipeline: {forced_pipeline}")
+                else:
+                    p1 = create_tagging_prompt(structured_context, "gemini").replace("<image>\n", "")
+                    response1 = model.generate_content([p1, image_pil])
+                    tag_text = re.sub(r"^(Category:|Answer:|Selected Categories:)\s*", "", response1.text, flags=re.IGNORECASE).strip()
+                    categories = [valid_map[t.strip().lower()] for t in tag_text.split(',') if t.strip().lower() in valid_map] or ["Other"]
 
-            # Pass 2: Alt Text
-            is_complex = any(c in complex_types for c in categories)
-            p2 = create_complex_data_alt_text_prompt(structured_context, categories, existing_alt, "gemini") if is_complex else create_alt_text_prompt(structured_context, categories, existing_alt, "gemini")
-            p2 = p2.replace("<image>\n", "")
-            response2 = model.generate_content([p2, image_pil])
-            alt_text = response2.text
+                # Pass 2: Alt Text
+                is_complex = any(c in complex_types for c in categories)
+                p2 = create_complex_data_alt_text_prompt(structured_context, categories, existing_alt, "gemini") if is_complex else create_alt_text_prompt(structured_context, categories, existing_alt, "gemini")
+                p2 = p2.replace("<image>\n", "")
+                response2 = model.generate_content([p2, image_pil])
+                alt_text = response2.text
 
-            # Pass 3: MathML
-            if "Equation" in categories:
-                p3 = create_mathml_prompt("gemini").replace("<image>\n", "")
-                response3 = model.generate_content([p3, image_pil])
-                mathml = response3.text
+                # Pass 3: MathML
+                if "Equation" in categories:
+                    p3 = create_mathml_prompt("gemini").replace("<image>\n", "")
+                    response3 = model.generate_content([p3, image_pil])
+                    mathml = response3.text
 
-        except Exception as e:
-            logger.error(f"Gemini API failed for image {task_idx}: {e}")
-            alt_text = f"Gemini Error: {e}"
-            categories = ["Needs Review"]
+                gemini_success = True
+                break # Success! Exit the retry loop early
 
-    # --- EXISTING LOCAL MODEL BRANCH ---
-    else:
+            except Exception as e:
+                logger.warning(f"Gemini API attempt {attempt + 1} failed for image {task_idx}: {e}")
+                if attempt < max_retries - 1:
+                    logger.info(f"Waiting 30 seconds before retrying Gemini for image {task_idx}...")
+                    time.sleep(30)
+                else:
+                    logger.error(f"All {max_retries} Gemini attempts failed. Falling back to local model.")
+                    # Keep alt_text empty so it drops into the local fallback
+
+    # --- EXISTING LOCAL MODEL BRANCH (USED IF LOCAL SELECTED OR IF GEMINI FAILED) ---
+    if not gemini_success:
+        # If Gemini completely failed, the local model was bypassed during startup. We must load it now.
+        if provider == "gemini":
+            logger.info("Initializing local primary model for fallback...")
+            primary_model_system = get_primary_model(provider="local")
+
         if primary_model_system and primary_model_system.get("model"):
             try:
                 model, processor = primary_model_system["model"], primary_model_system["processor"]
@@ -342,7 +358,7 @@ def classify_and_generate_alt_text(
             except Exception as e:
                 logger.error(f"Primary model prompt failed for image {task_idx}: {e}")
 
-        # Fallback
+        # Fallback (SmolVLM)
         if not alt_text:
             try:
                 fb_info = get_fallback_model()
@@ -499,13 +515,12 @@ def run_agent_pipeline(file_path, ext, progress_callback=None, provider="local",
                     )
                     
                     # --- TABLE PIPELINE INTEGRATION ---
-                    if cats and cats[0] == "Table":
-                        logger.info(f"Image {i} primary classification is Table. Extracting data...")
+                    if "Table" in cats: # <-- Relaxed condition
+                        logger.info(f"Image {i} classification includes Table. Extracting data...")
                         table_data = extract_table_from_image(shape.image.blob)
                         if table_data:
                             insert_table_into_pptx(pres.slides[slide_num-1], shape, table_data, alt_text=gen_alt)
                             pres_modified = True
-                    # ----------------------------------
 
                     import base64
                     try:
@@ -526,56 +541,83 @@ def run_agent_pipeline(file_path, ext, progress_callback=None, provider="local",
 
         elif ext == ".docx":
             doc = Document(file_path)
-            inline_shapes = list(doc.part.inline_shapes)
-            total_count = len(inline_shapes)
-            doc_modified = False # <--- Track DOCX changes
             
-            for i, shape in enumerate(inline_shapes, 1):
+            # Use XPath to find ALL images (inline and anchored)
+            drawing_elements = doc._element.xpath('.//w:drawing')
+            total_count = len(drawing_elements)
+            doc_modified = False 
+            
+            for i, drawing in enumerate(drawing_elements, 1):
                 try:
-                    if shape.type == 3: # Picture
-                        rId = shape._inline.graphic.graphicData.pic.blipFill.blip.embed
-                        rel = doc.part.rels[rId]
-                        image_bytes = rel.target_part.blob
-                        
-                        alt = shape._inline.find(qn('wp:docPr')).get('descr', '')
-                        ctx = get_context_for_image_docx(doc, shape._inline)
-                    
-                        # 3. --- BACKGROUND RAG QUERY (DOCX) ---
-                        if text_rag and ctx.get("surrounding_text"):
-                            rag_hits = text_rag.search(ctx["surrounding_text"], top_k=2)
-                            if rag_hits:
-                                ctx["broader_context"] = " ".join([hit['text'] for hit in rag_hits])
-                        cats, gen_alt, _ = classify_and_generate_alt_text(
-                            shape.image.blob, ctx, primary_model, ext, alt, slide_num, i-1,
-                            provider=provider, api_key=api_key
-                        )
-                        
-                        # --- EQUATION PIPELINE INTEGRATION ---
-                        if cats and cats[0] == "Equation":
-                            logger.info(f"Image {i} primary classification is Equation. Extracting LaTeX...")
-                            equations = extract_equations_from_image(image_bytes)
-                            if equations:
-                                insert_equation_into_docx(doc, shape._inline, equations)
-                                doc_modified = True
-                        # -------------------------------------
+                    # Safely get Relationship ID
+                    # REMOVED: namespaces=namespaces (python-docx handles this internally)
+                    rId = None
+                    blips = drawing.xpath('.//a:blip/@r:embed')
+                    if blips:
+                        rId = blips[0]
+                    else:
+                        charts = drawing.xpath('.//c:chart/@r:id')
+                        if charts: rId = charts[0]
 
-                        # --- TABLE PIPELINE INTEGRATION ---
-                        if cats and cats[0] == "Table":
-                            logger.info(f"Image {i} primary classification is Table. Extracting data...")
-                            table_data = extract_table_from_image(image_bytes)
-                            if table_data:
-                                insert_table_into_docx(doc, shape._inline, table_data, alt_text=gen_alt)
-                                doc_modified = True
-                        # ----------------------------------
-                        
-                        import base64
-                        try:
-                            disp_bytes = preprocess_image(image_bytes, 256)
-                        except:
-                            disp_bytes = image_bytes
+                    if not rId: continue
+                    
+                    rel = doc.part.rels[rId]
+                    image_bytes = rel.target_part.blob
+                    
+                    # Safely get alt text
+                    alt = ""
+                    docPr_elements = drawing.xpath('.//wp:docPr')
+                    if docPr_elements:
+                        alt = docPr_elements[0].get('descr', '')
+
+                    # Get surrounding context
+                    ctx = {"surrounding_text": ""}
+                    parent_p = drawing.xpath('./ancestor::w:p')
+                    if parent_p:
+                        ctx["surrounding_text"] = "".join(parent_p[0].itertext())[:300]
+                    
+                    # --- BACKGROUND RAG QUERY (DOCX) ---
+                    if text_rag and ctx.get("surrounding_text"):
+                        rag_hits = text_rag.search(ctx["surrounding_text"], top_k=2)
+                        if rag_hits:
+                            ctx["broader_context"] = " ".join([hit['text'] for hit in rag_hits])
                             
-                        img_data = base64.b64encode(disp_bytes).decode()
-                        results.append({"classification": cats, "alt_text": alt, "generated_alt_text": gen_alt, "image_idx": i, "image_data": f"data:image/jpeg;base64,{img_data}", "rId": rId})
+                    cats, gen_alt, _ = classify_and_generate_alt_text(
+                        image_bytes, ctx, primary_model, ext, alt, 1, i-1,
+                        provider=provider, api_key=api_key
+                    )
+                    
+                    # --- TABLE PIPELINE INTEGRATION ---
+                    if "Table" in cats:
+                        logger.info(f"Image {i} classification includes Table. Extracting data...")
+                        # "drawing" is the lxml w:drawing element from our loop
+                        table_data = extract_table_from_image(image_bytes)
+                        if table_data:
+                            insert_table_into_docx(doc, drawing, table_data, alt_text=gen_alt)
+                            doc_modified = True
+                    # ----------------------------------
+                    
+                    # --- EQUATION PIPELINE INTEGRATION ---
+                    if "Equation" in cats:
+                        logger.info(f"Image {i} classification includes Equation. Extracting LaTeX...")
+                        equations = extract_equations_from_image(image_bytes)
+                        if equations:
+                            insert_equation_into_docx(doc, drawing, equations)
+                            doc_modified = True
+                    # ----------------------------------
+
+                    # Generate preview
+                    import base64
+                    try: disp_bytes = preprocess_image(image_bytes, 256)
+                    except: disp_bytes = image_bytes
+                        
+                    img_data = base64.b64encode(disp_bytes).decode()
+                    results.append({
+                        "classification": cats, "alt_text": alt, 
+                        "generated_alt_text": gen_alt, "image_idx": i, 
+                        "image_data": f"data:image/jpeg;base64,{img_data}", "rId": rId
+                    })
+                    
                 except Exception as inner_e:
                     logger.error(f"Error on docx image {i}: {inner_e}")
                     results.append({"classification": ["Needs Review"], "alt_text": "", "generated_alt_text": f"Error: {inner_e}", "image_idx": i})
