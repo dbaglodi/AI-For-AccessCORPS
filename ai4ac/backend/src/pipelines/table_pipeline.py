@@ -7,17 +7,9 @@ from transformers import (
     TableTransformerForObjectDetection,
     DetrImageProcessor,
 )
+import easyocr
+import numpy as np
 
-# Optional: for cell text OCR
-try:
-    import pytesseract
-    TESSERACT_AVAILABLE = True
-except ImportError:
-    TESSERACT_AVAILABLE = False
-    logging.getLogger(__name__).warning(
-        "pytesseract not installed. Cell text will be empty. "
-        "Install with: pip install pytesseract"
-    )
 
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
@@ -55,17 +47,21 @@ def get_table_models():
         return None
 
 
+_reader = easyocr.Reader(['en'], gpu=True if DEVICE == "cuda" else False)
+
 def _get_cell_text(img: Image.Image, bbox: list[float]) -> str:
-    if not TESSERACT_AVAILABLE: return ""
     x0, y0, x1, y1 = [int(v) for v in bbox]
-    
     if x1 <= x0 or y1 <= y0: return ""
     
     cell_img = img.crop((x0, y0, x1, y1))
     
-    # REMOVED: cell_img.save(f"/tmp/debug_cell_{x0}_{y0}.png") <-- This causes backend crashes
-    text = pytesseract.image_to_string(cell_img, config="--psm 7").strip()
-    return text
+    # EasyOCR expects a numpy array, not a PIL Image
+    cell_np = np.array(cell_img)
+    
+    # Extract text (detail=0 returns just the strings, not the coordinates)
+    results = _reader.readtext(cell_np, detail=0)
+    
+    return " ".join(results).strip()
 
 
 def _boxes_to_grid(
@@ -104,7 +100,7 @@ def _boxes_to_grid(
     return grid
 
 
-def extract_table_from_image(image_bytes: bytes) -> list[list[str]]:
+def extract_table_from_image(image_bytes: bytes, provider: str = "local", api_key: str = None) -> list[list[str]]:
     models = get_table_models()
     if not models:
         return []
@@ -163,6 +159,16 @@ def extract_table_from_image(image_bytes: bytes) -> list[list[str]]:
 
         # Pass img_original instead of img_resized for OCR quality
         grid = _boxes_to_grid(row_boxes, col_boxes, cell_boxes, img_original)
+        
+        # --- NEW DYNAMIC FALLBACK ROUTING ---
+        if not grid or not any(grid):
+            if provider.lower() == "gemini":
+                logger.info("Standard model failed. Falling back to Gemini...")
+                grid = _extract_table_with_gemini(image_bytes, api_key)
+            else:
+                logger.info("Standard model failed. Falling back to PaliGemma...")
+                grid = _extract_table_with_paligemma(image_bytes)
+
         return grid
 
     except Exception as e:
@@ -214,6 +220,46 @@ def _extract_table_with_paligemma(image_bytes: bytes) -> list[list[str]]:
 
     except Exception as e:
         logger.error(f"PaliGemma table fallback failed: {e}")
+        return []
+
+def _extract_table_with_gemini(image_bytes: bytes, api_key: str) -> list[list[str]]:
+    """
+    Fallback for borderless/complex tables using Google's Gemini model.
+    """
+    try:
+        import google.generativeai as genai
+        import json
+        
+        if not api_key:
+            logger.error("No API key provided for Gemini fallback.")
+            return []
+
+        genai.configure(api_key=api_key)
+        # Using 1.5-flash as it is extremely fast and great at visual JSON extraction
+        model = genai.GenerativeModel('gemini-2.5-flash-lite')
+
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+
+        prompt = (
+            "Extract the table from this image. "
+            "Return ONLY a JSON array of arrays where each inner array is a row "
+            "and each string is a cell value. "
+            "No markdown, no backticks, just raw JSON."
+        )
+
+        response = model.generate_content([prompt, img])
+        raw = response.text.strip()
+
+        # Clean up common model output artifacts
+        raw = raw.replace("```json", "").replace("```", "").strip()
+
+        table_data = json.loads(raw)
+        if isinstance(table_data, list) and all(isinstance(r, list) for r in table_data):
+            return table_data
+        return []
+
+    except Exception as e:
+        logger.error(f"Gemini table fallback failed: {e}")
         return []
 
 def insert_table_into_pptx(slide, image_shape, table_data: list[list[str]], alt_text: str = ""):

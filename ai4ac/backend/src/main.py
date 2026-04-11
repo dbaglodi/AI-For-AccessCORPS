@@ -328,6 +328,28 @@ async def regenerate_image(file_id: str, req: RegenerateRequest):
             else:
                 raise HTTPException(status_code=404, detail="Image index out of bounds in DOCX.")
 
+        # --- ADD THIS BLOCK: Recover missing image bytes from the JSON cache ---
+        if not image_bytes:
+            import base64
+            json_path = PROCESSED_DIR / f"{file_id}.json"
+            if json_path.exists():
+                with open(json_path, "r", encoding="utf-8") as f:
+                    cached_results = json.load(f)
+                for res in cached_results:
+                    if res.get("image_idx") == req.image_idx:
+                        # Find the base64 string (often saved as 'base64_image' or 'image')
+                        b64_str = res.get("base64_image") or res.get("image")
+                        if b64_str:
+                            if "," in b64_str: 
+                                b64_str = b64_str.split(",")[1] # Strip data URI prefix if present
+                            image_bytes = base64.b64decode(b64_str)
+                            print(f"--> SUCCESS: Recovered missing image bytes from JSON cache!")
+                            break
+        # -----------------------------------------------------------------------
+
+        # 3. Route to the correct pipeline
+        from src.pipelines.agent_pipeline import classify_and_generate_alt_text, get_primary_model
+
         # 3. Route to the correct pipeline
         from src.pipelines.agent_pipeline import classify_and_generate_alt_text, get_primary_model
         primary_model = get_primary_model(provider=req.provider)
@@ -367,11 +389,26 @@ async def regenerate_image(file_id: str, req: RegenerateRequest):
                 # Fallback insertion (since shape is raw XML now)
                 pass 
                 
-        # 4. Save document modifications 
-        if doc_modified:
-            if ext == ".docx": doc.save(orig_path)
-            elif ext == ".pptx": pres.save(orig_path)
-
+        # --- ADDED: Logic to handle Table generation and insertion ---
+        elif req.forced_pipeline.lower() == "table" and image_bytes:
+            from src.pipelines.table_pipeline import extract_table_from_image, insert_table_into_docx, insert_table_into_pptx
+            import logging
+            
+            logging.info("--> ENTERED TABLE PIPELINE ROUTING")
+            table_data = extract_table_from_image(image_bytes, provider=req.provider, api_key=req.api_key)
+            logging.info(f"--> EXTRACTED TABLE DATA: {table_data}") 
+            
+            if table_data and any(table_data):
+                if ext == ".docx":
+                    insert_table_into_docx(doc, target_shape, table_data, alt_text=new_alt_text)
+                    doc_modified = True
+                    logging.info("--> DOCX TABLE INSERTED")
+                elif ext == ".pptx":
+                    insert_table_into_pptx(slide_target, target_shape, table_data, alt_text=new_alt_text)
+                    doc_modified = True
+                    logging.info("--> PPTX TABLE INSERTED")
+            else:
+                logging.warning("--> TABLE DATA WAS EMPTY, SKIPPED INSERTION")
         # 5. Update the JSON processing cache
         json_path = PROCESSED_DIR / f"{file_id}.json"
         if json_path.exists():
