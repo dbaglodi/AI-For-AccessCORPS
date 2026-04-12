@@ -381,16 +381,21 @@ async def regenerate_image(file_id: str, req: RegenerateRequest):
                 cNvPr_elements[0].set('descr', new_alt_text)
                 doc_modified = True
 
-        # Handle extra extractions (Table/Equation)
         if req.forced_pipeline == "Equation" and image_bytes:
             from src.pipelines.equation_pipeline import extract_equations_from_image, insert_equation_into_docx
-            equations = extract_equations_from_image(image_bytes)
-            if equations and ext == ".docx":
-                # Fallback insertion (since shape is raw XML now)
-                pass 
+            equations = extract_equations_from_image(image_bytes, provider=req.provider, api_key=req.api_key)
+            if equations:
+                if ext == ".docx":
+                    # Fallback insertion (since shape is raw XML now)
+                    pass 
+            else:
+                # --- NEW: Bubble up Equation failure to the frontend ---
+                raise HTTPException(
+                    status_code=422, 
+                    detail="Equation extraction failed: Could not identify mathematical content in the image."
+                )
                 
-        # --- ADDED: Logic to handle Table generation and insertion ---
-        elif req.forced_pipeline.lower() == "table" and image_bytes:
+        elif req.forced_pipeline == "Table" and image_bytes:
             from src.pipelines.table_pipeline import extract_table_from_image, insert_table_into_docx, insert_table_into_pptx
             import logging
             
@@ -408,7 +413,19 @@ async def regenerate_image(file_id: str, req: RegenerateRequest):
                     doc_modified = True
                     logging.info("--> PPTX TABLE INSERTED")
             else:
-                logging.warning("--> TABLE DATA WAS EMPTY, SKIPPED INSERTION")
+                # --- NEW: Bubble up Table failure to the frontend ---
+                logging.warning("--> TABLE DATA WAS EMPTY, ABORTING AND NOTIFYING FRONTEND")
+                raise HTTPException(
+                    status_code=422, 
+                    detail="Table extraction failed: Could not detect a valid table structure in the image."
+                )
+        if doc_modified:
+            if ext == ".docx" and doc:
+                doc.save(orig_path)
+                logging.info(f"--> Saved modified DOCX back to {orig_path}")
+            elif ext == ".pptx" and pres:
+                pres.save(orig_path)
+                logging.info(f"--> Saved modified PPTX back to {orig_path}")
         # 5. Update the JSON processing cache
         json_path = PROCESSED_DIR / f"{file_id}.json"
         if json_path.exists():

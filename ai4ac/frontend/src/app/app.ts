@@ -15,7 +15,7 @@ import { switchMap, takeWhile } from 'rxjs/operators';
 })
 // --- START MODIFICATION: Add AfterViewInit ---
 export class AppComponent implements OnDestroy, AfterViewInit {
-// --- END MODIFICATION ---
+  private readonly apiUrl = 'http://localhost:8000';
   selectedFile: File | null = null;
   modelProvider: string = 'local';
   geminiApiKey: string = '';
@@ -35,12 +35,12 @@ export class AppComponent implements OnDestroy, AfterViewInit {
   // --- END MODIFICATION ---
 
   availableTags: string[] = [
-    'Equation', 
-    'Table', 
-    'Figure', 
-    'Diagram', 
-    'Chart', 
-    'Photo', 
+    'Equation',
+    'Table',
+    'Figure',
+    'Diagram',
+    'Chart',
+    'Photo',
     'Needs Review'
   ];
 
@@ -70,21 +70,21 @@ export class AppComponent implements OnDestroy, AfterViewInit {
   }
 
   resetState() {
-      // --- START MODIFICATION: Remove uploadProgress ---
-      // this.uploadProgress = 0; // Removed
-      // --- END MODIFICATION ---
-      this.fileId = null;
-      this.images = [];
-      this.activeIndex = 0;
-      this.loadingImages = false;
-      this.error = null;
-      this.updating = false;
-      this.processing = false;
-      this.processingStatus = null;
-      if (this.statusCheckSubscription) {
-        this.statusCheckSubscription.unsubscribe();
-        this.statusCheckSubscription = null;
-      }
+    // --- START MODIFICATION: Remove uploadProgress ---
+    // this.uploadProgress = 0; // Removed
+    // --- END MODIFICATION ---
+    this.fileId = null;
+    this.images = [];
+    this.activeIndex = 0;
+    this.loadingImages = false;
+    this.error = null;
+    this.updating = false;
+    this.processing = false;
+    this.processingStatus = null;
+    if (this.statusCheckSubscription) {
+      this.statusCheckSubscription.unsubscribe();
+      this.statusCheckSubscription = null;
+    }
   }
 
   uploadFile() {
@@ -102,7 +102,7 @@ export class AppComponent implements OnDestroy, AfterViewInit {
     this.processingStatus = { current_step: 'Uploading file...' }; // Simpler initial status
     // --- END MODIFICATION ---
 
-    this.http.post<any>('http://localhost:8000/upload', formData, {
+    this.http.post<any>(`${this.apiUrl}/upload`, formData, {
       reportProgress: true,
       observe: 'events'
     }).subscribe({
@@ -137,7 +137,7 @@ export class AppComponent implements OnDestroy, AfterViewInit {
 
     this.statusCheckSubscription = interval(2000)
       .pipe(
-        switchMap(() => this.http.get<any>(`http://localhost:8000/status/${this.fileId}`)),
+        switchMap(() => this.http.get<any>(`${this.apiUrl}/status/${this.fileId}`)),
       )
       .subscribe({
         next: status => {
@@ -177,24 +177,24 @@ export class AppComponent implements OnDestroy, AfterViewInit {
     }
   }
 
-  // --- START MODIFICATION: Helper to map image data ---
   private mapImageData(img: any, index: number): any {
+    const classifications = Array.isArray(img.classification) ? img.classification : [];
+    
     return {
       ...img,
       userAltText: img.generated_alt_text || img.alt_text || '',
-      // short_description: img.short_description || 'N/A', // Removed
-      // Ensure classification is always an array
-      classification: Array.isArray(img.classification) ? img.classification : [],
+      classification: classifications,
+      // explicitly set the initial dropdown value so it doesn't render blank
+      selectedPipeline: classifications.length > 0 ? classifications[0] : 'Needs Review',
       originalIndex: index
     };
   }
-  // --- END MODIFICATION ---
 
   fetchImages(isFinalFetch: boolean) {
     if (!this.fileId) return;
     this.loadingImages = isFinalFetch;
 
-    this.http.get<any>(`http://localhost:8000/images/${this.fileId}`).subscribe({
+    this.http.get<any>(`${this.apiUrl}/images/${this.fileId}`).subscribe({
       next: res => {
         console.log('Fetch images response:', res);
 
@@ -211,18 +211,18 @@ export class AppComponent implements OnDestroy, AfterViewInit {
           this.cdr.detectChanges(); // Trigger change detection
           this.scrollToActiveIndex(); // Scroll after view updates
         } else if (res.status === 'processing' || res.status === 'uploading') {
-           this.processing = true;
-           if (Array.isArray(res.images)) {
-               this.appendNewImages(res.images);
-           }
-           if (!this.statusCheckSubscription && !isFinalFetch) {
-               console.warn("Polling was stopped but status is not complete. Restarting poll.");
-               this.startStatusCheck();
-           }
-           this.loadingImages = false;
+          this.processing = true;
+          if (Array.isArray(res.images)) {
+            this.appendNewImages(res.images);
+          }
+          if (!this.statusCheckSubscription && !isFinalFetch) {
+            console.warn("Polling was stopped but status is not complete. Restarting poll.");
+            this.startStatusCheck();
+          }
+          this.loadingImages = false;
         } else {
-             console.warn("Unexpected status from /images endpoint:", res.status);
-             this.loadingImages = false;
+          console.warn("Unexpected status from /images endpoint:", res.status);
+          this.loadingImages = false;
         }
       },
       error: (err: HttpErrorResponse) => {
@@ -234,15 +234,15 @@ export class AppComponent implements OnDestroy, AfterViewInit {
   }
 
   sortImages(imageList: any[]): any[] {
-     return imageList.sort((a, b) => {
-        if (a.slide_num !== b.slide_num && a.slide_num != null && b.slide_num != null) {
-            return a.slide_num - b.slide_num;
-        }
-        // Use image_idx primarily, fall back to originalIndex
-        const idxA = a.image_idx ?? a.originalIndex ?? Infinity;
-        const idxB = b.image_idx ?? b.originalIndex ?? Infinity;
-        return idxA - idxB;
-     });
+    return imageList.sort((a, b) => {
+      if (a.slide_num !== b.slide_num && a.slide_num != null && b.slide_num != null) {
+        return a.slide_num - b.slide_num;
+      }
+      // Use image_idx primarily, fall back to originalIndex
+      const idxA = a.image_idx ?? a.originalIndex ?? Infinity;
+      const idxB = b.image_idx ?? b.originalIndex ?? Infinity;
+      return idxA - idxB;
+    });
   }
 
 
@@ -286,11 +286,11 @@ export class AppComponent implements OnDestroy, AfterViewInit {
     this.error = null;
 
     const updates = this.images.map(img => ({
-        image_idx: img.image_idx,
-        alt_text: img.userAltText
+      image_idx: img.image_idx,
+      alt_text: img.userAltText
     }));
 
-    this.http.post<any>(`http://localhost:8000/alt-text/${this.fileId}`, { updates }).subscribe({
+    this.http.post<any>(`${this.apiUrl}/alt-text/${this.fileId}`, { updates }).subscribe({
       next: res => {
         console.log('Alt text update successful:', res);
         this.updating = false;
@@ -310,34 +310,34 @@ export class AppComponent implements OnDestroy, AfterViewInit {
     const newIndex = (i + this.images.length) % this.images.length;
 
     if (this.activeIndex !== newIndex) {
-        this.activeIndex = newIndex;
-        this.scrollToActiveIndex();
+      this.activeIndex = newIndex;
+      this.scrollToActiveIndex();
     }
   }
 
   scrollToActiveIndex() {
-      // Use timeout to allow Angular to update the view *before* scrolling
-      setTimeout(() => {
-          if (this.cardsViewportRef && this.cardsContainerRef) {
-              const viewport = this.cardsViewportRef.nativeElement;
-              const container = this.cardsContainerRef.nativeElement;
-              const cardElements = container.children;
-              if (cardElements.length > this.activeIndex) {
-                  const activeCard = cardElements[this.activeIndex] as HTMLElement;
-                  const scrollLeft = activeCard.offsetLeft - viewport.offsetLeft; // Calculate scroll position based on card offset
+    // Use timeout to allow Angular to update the view *before* scrolling
+    setTimeout(() => {
+      if (this.cardsViewportRef && this.cardsContainerRef) {
+        const viewport = this.cardsViewportRef.nativeElement;
+        const container = this.cardsContainerRef.nativeElement;
+        const cardElements = container.children;
+        if (cardElements.length > this.activeIndex) {
+          const activeCard = cardElements[this.activeIndex] as HTMLElement;
+          const scrollLeft = activeCard.offsetLeft - viewport.offsetLeft; // Calculate scroll position based on card offset
 
-                  viewport.scrollTo({
-                      left: scrollLeft,
-                      behavior: 'smooth'
-                  });
-                  console.log(`Scrolled to index ${this.activeIndex} at position ${scrollLeft}`);
-              } else {
-                   console.warn(`Card element for index ${this.activeIndex} not found.`);
-              }
-          } else {
-               console.warn("Viewport or container ref not available for scrolling.");
-          }
-      }, 50); // Small delay might be needed
+          viewport.scrollTo({
+            left: scrollLeft,
+            behavior: 'smooth'
+          });
+          console.log(`Scrolled to index ${this.activeIndex} at position ${scrollLeft}`);
+        } else {
+          console.warn(`Card element for index ${this.activeIndex} not found.`);
+        }
+      } else {
+        console.warn("Viewport or container ref not available for scrolling.");
+      }
+    }, 50); // Small delay might be needed
   }
   // --- END MODIFICATION ---
 
@@ -376,7 +376,8 @@ export class AppComponent implements OnDestroy, AfterViewInit {
       api_key: providerToUse === 'gemini' ? this.geminiApiKey : null
     };
 
-    this.http.post<any>(`/api/regenerate-image/${this.fileId}`, payload).subscribe({
+    // Use this.apiUrl instead of a hardcoded or relative path
+    this.http.post<any>(`${this.apiUrl}/api/regenerate-image/${this.fileId}`, payload).subscribe({
       next: (response) => {
         img.generated_alt_text = response.new_alt_text || response.generated_alt_text; // Ensure we grab new_alt_text 
         
@@ -392,6 +393,14 @@ export class AppComponent implements OnDestroy, AfterViewInit {
       },
       error: (err) => {
         console.error("Error regenerating alt text", err);
+        
+        // Alert the user if the backend throws our custom 422 extraction failure error
+        if (err.status === 422 && err.error && err.error.detail) {
+            alert(err.error.detail);
+        } else {
+            alert("An error occurred while trying to regenerate the image extraction.");
+        }
+        
         img.isRegenerating = false;
         this.cdr.detectChanges();
       }
@@ -404,52 +413,52 @@ export class AppComponent implements OnDestroy, AfterViewInit {
 
     console.log(`Attempting to download file for ID: ${this.fileId}`);
 
-    this.http.get(`http://localhost:8000/download/${this.fileId}`, {
+    this.http.get(`${this.apiUrl}/download/${this.fileId}`, {
       responseType: 'blob',
       observe: 'response'
     }).subscribe({
-        next: (response: HttpResponse<Blob>) => {
-            const blob = response.body;
-            console.log('Download response received. Status:', response.status);
+      next: (response: HttpResponse<Blob>) => {
+        const blob = response.body;
+        console.log('Download response received. Status:', response.status);
 
-            if (!blob || blob.size === 0) {
-              console.error('Download failed: Empty or null blob received.');
-              this.error = 'Download failed: Received empty file data from server.';
-              return;
-            }
-
-            const contentDisposition = response.headers.get('content-disposition');
-            let filename = `remediated_${this.fileId}.file`;
-            console.log('Content-Disposition header:', contentDisposition);
-
-            if (contentDisposition) {
-              const filenameRegex = /filename\*?=(?:(?:UTF-8|utf-8)''|["']?)([^;"]+)["']?/;
-              const matches = filenameRegex.exec(contentDisposition);
-              if (matches != null && matches[1]) {
-                try {
-                  filename = decodeURIComponent(matches[1]);
-                } catch (e) {
-                  console.warn("Could not decode filename, using raw value:", matches[1]);
-                  filename = matches[1];
-                }
-              }
-            }
-            console.log('Using filename:', filename);
-
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            window.URL.revokeObjectURL(url);
-            document.body.removeChild(a);
-            console.log('Download triggered for:', filename);
-        },
-        error: (err: HttpErrorResponse) => {
-          this.error = `Download failed: ${err.status} ${err.statusText || 'Unknown error'}`;
-          console.error('Download error:', err);
+        if (!blob || blob.size === 0) {
+          console.error('Download failed: Empty or null blob received.');
+          this.error = 'Download failed: Received empty file data from server.';
+          return;
         }
+
+        const contentDisposition = response.headers.get('content-disposition');
+        let filename = `remediated_${this.fileId}.file`;
+        console.log('Content-Disposition header:', contentDisposition);
+
+        if (contentDisposition) {
+          const filenameRegex = /filename\*?=(?:(?:UTF-8|utf-8)''|["']?)([^;"]+)["']?/;
+          const matches = filenameRegex.exec(contentDisposition);
+          if (matches != null && matches[1]) {
+            try {
+              filename = decodeURIComponent(matches[1]);
+            } catch (e) {
+              console.warn("Could not decode filename, using raw value:", matches[1]);
+              filename = matches[1];
+            }
+          }
+        }
+        console.log('Using filename:', filename);
+
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+        console.log('Download triggered for:', filename);
+      },
+      error: (err: HttpErrorResponse) => {
+        this.error = `Download failed: ${err.status} ${err.statusText || 'Unknown error'}`;
+        console.error('Download error:', err);
+      }
     });
   }
 

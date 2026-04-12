@@ -87,9 +87,9 @@
               </div>
               
               <div class="pipeline-controls" style="display: flex; gap: 10px; align-items: center; margin-top: 10px; flex-wrap: wrap; background: var(--background-light); padding: 10px; border-radius: 4px;">
-                <label style="font-weight: bold; font-size: 0.9em;">Pipeline Override:</label>
+                <label style="font-weight: bold; font-size: 0.9em;">Pipeline:</label>
                 <select [(ngModel)]="img.selectedPipeline" style="padding: 0.4rem; border-radius: 4px; border: 1px solid var(--border-color);">
-                  <option *ngIf="img.classification?.length" [value]="img.classification[0]">Keep: {{ img.classification[0] }}</option>
+                  <option *ngIf="img.classification?.length" [value]="img.classification[0]">{{ img.classification[0] }}</option>
                   <option value="General">General</option>
                   <option value="Table">Table</option>
                   <option value="Equation">Equation</option>

@@ -101,6 +101,12 @@ def _boxes_to_grid(
 
 
 def extract_table_from_image(image_bytes: bytes, provider: str = "local", api_key: str = None) -> list[list[str]]:
+    if provider.lower() == "gemini":
+        logger.info("Routing Table extraction directly to Gemini...")
+        return _extract_table_with_gemini(image_bytes, api_key)
+
+    # 2. Local Flow
+    logger.info("Routing Table extraction to Local (Table Transformer + EasyOCR)...")
     models = get_table_models()
     if not models:
         return []
@@ -162,64 +168,13 @@ def extract_table_from_image(image_bytes: bytes, provider: str = "local", api_ke
         
         # --- NEW DYNAMIC FALLBACK ROUTING ---
         if not grid or not any(grid):
-            if provider.lower() == "gemini":
-                logger.info("Standard model failed. Falling back to Gemini...")
-                grid = _extract_table_with_gemini(image_bytes, api_key)
-            else:
-                logger.info("Standard model failed. Falling back to PaliGemma...")
-                grid = _extract_table_with_paligemma(image_bytes)
+            logger.warning("Local standard models failed to extract table structure. Returning empty.")
+            return []
 
         return grid
 
     except Exception as e:
         logger.error(f"Table extraction failed: {e}")
-        return []
-
-
-def _extract_table_with_paligemma(image_bytes: bytes) -> list[list[str]]:
-    """
-    Fallback for borderless/complex tables — uses the already-loaded PaliGemma
-    to extract table contents as JSON. No extra model needed.
-    """
-    try:
-        # Import here to avoid circular imports
-        from src.pipelines.agent_pipeline import get_primary_model
-        from src.config.gpu_config import get_gpu_settings
-
-        model_info = get_primary_model()
-        if not model_info or not model_info.get("model"):
-            return []
-
-        model = model_info["model"]
-        processor = model_info["processor"]
-        device = get_gpu_settings()["device"]
-
-        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-
-        prompt = (
-            "<image>\n"
-            "Extract the table from this image. "
-            "Return ONLY a JSON array of arrays where each inner array is a row "
-            "and each string is a cell value. "
-            "No markdown, no backticks, just raw JSON."
-        )
-
-        inputs = processor(text=prompt, images=img, return_tensors="pt").to(device)
-        with torch.inference_mode():
-            out = model.generate(**inputs, max_new_tokens=500)
-        raw = processor.decode(out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True).strip()
-
-        # Clean up common model output artifacts
-        raw = raw.replace("```json", "").replace("```", "").strip()
-
-        import json
-        table_data = json.loads(raw)
-        if isinstance(table_data, list) and all(isinstance(r, list) for r in table_data):
-            return table_data
-        return []
-
-    except Exception as e:
-        logger.error(f"PaliGemma table fallback failed: {e}")
         return []
 
 def _extract_table_with_gemini(image_bytes: bytes, api_key: str) -> list[list[str]]:

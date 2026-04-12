@@ -105,8 +105,37 @@ def _sanitize_equations(latex_block: str) -> list[str]:
     return cleaned
 
 
-def extract_equations_from_image(image_bytes: bytes) -> list[str]:
-    """Main pipeline: im2latex OCR → local VLM refinement → sanitize."""
+def _extract_equations_with_gemini(image_bytes: bytes, api_key: str) -> list[str]:
+    """Uses Gemini to directly extract and format LaTeX equations from an image."""
+    try:
+        import google.generativeai as genai
+        if not api_key:
+            logger.error("No API key provided for Gemini equation extraction.")
+            return []
+            
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-2.5-flash-lite')
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        
+        prompt = (
+            "Extract all mathematical equations from this image. "
+            "Return only the raw LaTeX string, separating multiple equations with \\\\. "
+            "Do not use markdown blocks, \\begin{align}, or explain anything."
+        )
+        
+        response = model.generate_content([prompt, img])
+        return _sanitize_equations(response.text)
+    except Exception as e:
+        logger.error(f"Gemini equation extraction failed: {e}")
+        return []
+
+def extract_equations_from_image(image_bytes: bytes, provider: str = "local", api_key: str = None) -> list[str]:
+    """Main pipeline: Routes to Gemini or Local (im2latex OCR → local VLM refinement)."""
+    if provider.lower() == "gemini":
+        logger.info("Routing Equation extraction to Gemini...")
+        return _extract_equations_with_gemini(image_bytes, api_key)
+
+    logger.info("Routing Equation extraction to Local (im2latex)...")
     models = get_equation_models()
     if not models:
         return []

@@ -517,7 +517,8 @@ def run_agent_pipeline(file_path, ext, progress_callback=None, provider="local",
                     # --- TABLE PIPELINE INTEGRATION ---
                     if "Table" in cats: # <-- Relaxed condition
                         logger.info(f"Image {i} classification includes Table. Extracting data...")
-                        table_data = extract_table_from_image(shape.image.blob)
+                        # Pass provider and api_key here
+                        table_data = extract_table_from_image(shape.image.blob, provider=provider, api_key=api_key)
                         if table_data:
                             insert_table_into_pptx(pres.slides[slide_num-1], shape, table_data, alt_text=gen_alt)
                             pres_modified = True
@@ -590,8 +591,8 @@ def run_agent_pipeline(file_path, ext, progress_callback=None, provider="local",
                     # --- TABLE PIPELINE INTEGRATION ---
                     if "Table" in cats:
                         logger.info(f"Image {i} classification includes Table. Extracting data...")
-                        # "drawing" is the lxml w:drawing element from our loop
-                        table_data = extract_table_from_image(image_bytes)
+                        # Pass provider and api_key here
+                        table_data = extract_table_from_image(image_bytes, provider=provider, api_key=api_key)
                         if table_data:
                             insert_table_into_docx(doc, drawing, table_data, alt_text=gen_alt)
                             doc_modified = True
@@ -600,7 +601,8 @@ def run_agent_pipeline(file_path, ext, progress_callback=None, provider="local",
                     # --- EQUATION PIPELINE INTEGRATION ---
                     if "Equation" in cats:
                         logger.info(f"Image {i} classification includes Equation. Extracting LaTeX...")
-                        equations = extract_equations_from_image(image_bytes)
+                        # Pass provider and api_key here
+                        equations = extract_equations_from_image(image_bytes, provider=provider, api_key=api_key)
                         if equations:
                             insert_equation_into_docx(doc, drawing, equations)
                             doc_modified = True
