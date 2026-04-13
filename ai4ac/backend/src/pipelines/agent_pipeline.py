@@ -22,9 +22,19 @@ from pptx import Presentation
 from pptx.slide import Slide as PptxSlide 
 from pptx.shapes.picture import Picture as PptxPicture
 from pptx.enum.shapes import MSO_SHAPE_TYPE
-import torch
-import numpy as np
-from transformers import AutoProcessor, PaliGemmaProcessor, PaliGemmaForConditionalGeneration
+
+logger = logging.getLogger(__name__)
+try:
+    import torch
+    import numpy as np
+    from transformers import AutoProcessor, PaliGemmaProcessor, PaliGemmaForConditionalGeneration
+except ImportError:
+    torch = None
+    np = None
+    AutoProcessor = None
+    PaliGemmaProcessor = None
+    PaliGemmaForConditionalGeneration = None
+    logger.warning("Heavy ML libraries not found. Local models disabled. Gemini API required.")
 import google.generativeai as genai
 
 # Local imports
@@ -91,7 +101,6 @@ DEFAULT_MAX_WORKERS = min(4, (os.cpu_count() or 1))
 _primary_model_cache = None
 _primary_model_lock = threading.Lock()
 _results_lock = threading.Lock()
-logger = logging.getLogger(__name__)
 
 UNSUPPORTED_IMAGE_PLACEHOLDER = "https://placehold.co/400x300/EFEFEF/AAAAAA?text=Unsupported+Format%5Cn(WMF/EMF)"
 

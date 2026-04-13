@@ -1,4 +1,7 @@
-import torch
+try:
+    import torch
+except ImportError:
+    torch = None
 import os
 import logging
 import importlib
@@ -71,6 +74,9 @@ def detect_gpu_capabilities():
     return settings
 
 def get_gpu_settings():
+    # If torch isn't installed (Lite mode), just return CPU settings safely
+    if torch is None:
+        return {"device": "cpu", "dtype": None}
     """Get cached GPU settings"""
     if not hasattr(get_gpu_settings, '_cache'):
         get_gpu_settings._cache = detect_gpu_capabilities()

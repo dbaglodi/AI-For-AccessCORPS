@@ -22,7 +22,15 @@ data/cache/*
 !data/cache/.gitkeep
 
 # Model downloads
-models/
+# Ignore heavy model weight files specifically, rather than all "models" folders
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.gguf
+*.onnx
+
+# Keep the cache ignores
 .cache/
 huggingface_hub/
 

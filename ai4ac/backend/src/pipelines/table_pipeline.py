@@ -1,14 +1,18 @@
 import io
 import logging
-import numpy as np
 from PIL import Image
-import torch
-from transformers import (
-    TableTransformerForObjectDetection,
-    DetrImageProcessor,
-)
-import easyocr
-import numpy as np
+try:
+    import torch
+    from transformers import TableTransformerForObjectDetection, DetrImageProcessor
+    import easyocr
+    import numpy as np
+    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+    # Move the easyocr reader initialization INSIDE the try block
+    _reader = easyocr.Reader(['en'], gpu=True if DEVICE == "cuda" else False)
+except ImportError:
+    torch = None
+    DEVICE = "cpu"
+    _reader = None
 
 
 from docx.oxml import OxmlElement
@@ -17,7 +21,6 @@ from pptx.util import Pt
 
 logger = logging.getLogger(__name__)
 
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 _table_models = None
 
 
@@ -47,7 +50,6 @@ def get_table_models():
         return None
 
 
-_reader = easyocr.Reader(['en'], gpu=True if DEVICE == "cuda" else False)
 
 def _get_cell_text(img: Image.Image, bbox: list[float]) -> str:
     x0, y0, x1, y1 = [int(v) for v in bbox]

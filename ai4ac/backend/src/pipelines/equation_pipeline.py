@@ -1,9 +1,14 @@
 import io
 import re
-import torch
 import logging
 from PIL import Image
-from transformers import VisionEncoderDecoderModel, AutoTokenizer, AutoImageProcessor
+try:
+    import torch
+    from transformers import VisionEncoderDecoderModel, AutoTokenizer, AutoImageProcessor
+    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+except ImportError:
+    torch = None
+    DEVICE = "cpu"
 
 logger = logging.getLogger(__name__)
 
@@ -13,7 +18,6 @@ except ImportError:
     add_math = None
     logger.warning("math2docx not installed. Equations will be inserted as plain text.")
 
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 _equation_models = None
 
 

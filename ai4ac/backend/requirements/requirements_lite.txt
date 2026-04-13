@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+python-multipart
+python-dotenv
+python-docx
+python-pptx
+lxml
+pillow
+google-generativeai
+math2docx
