@@ -15,7 +15,7 @@ import { switchMap, takeWhile } from 'rxjs/operators';
 })
 // --- START MODIFICATION: Add AfterViewInit ---
 export class AppComponent implements OnDestroy, AfterViewInit {
-  private readonly apiUrl = 'http://localhost:8000';
+  private readonly apiUrl = 'https://ai4ac-backend.onrender.com';
   selectedFile: File | null = null;
   modelProvider: string = 'local';
   geminiApiKey: string = '';
