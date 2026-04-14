@@ -337,10 +337,10 @@ def classify_and_generate_alt_text(
 
     # --- EXISTING LOCAL MODEL BRANCH (USED IF LOCAL SELECTED OR IF GEMINI FAILED) ---
     if not gemini_success:
-        # If Gemini completely failed, the local model was bypassed during startup. We must load it now.
+        # PREVENT MEMORY CRASH: Do NOT load the massive local model if Gemini fails due to rate limits.
         if provider == "gemini":
-            logger.info("Initializing local primary model for fallback...")
-            primary_model_system = get_primary_model(provider="local")
+            logger.error("Gemini failed (likely rate limit). Returning error text to prevent server crash.")
+            return ["Needs Review"], "API Error: Gemini rate limit reached (15 RPM). Please wait 1 minute and click Regenerate.", ""
 
         if primary_model_system and primary_model_system.get("model"):
             try:
