@@ -246,7 +246,7 @@ def create_tagging_prompt(structured_context, model_format="paligemma"):
 def create_complex_data_alt_text_prompt(structured_context, categories, existing_alt, model_format="paligemma"):
     ctx = _get_combined_context(structured_context)
     cat_str = ", ".join(categories)
-    instr = f"Image Type: {cat_str}. 1. Identify main trend. 2. Describe axes. 3. DO NOT list individual points. 4. CRITICAL: Do not read labels literally like '/ba/'; explain context."
+    instr = f"Image Type: {cat_str}. 1. Identify main trend. 2. Describe axes. 3. DO NOT list individual points. 4. CRITICAL: Do not read labels literally; explain context."
     p = f"Context: {ctx}\nExisting Alt: {existing_alt}\n{instr}\nAlt Text:"
     return f"<image>\n{p}" if model_format == "paligemma" else f"<image>\n{p}\nAnswer:"
 
@@ -254,6 +254,16 @@ def create_alt_text_prompt(structured_context, categories, existing_alt, model_f
     ctx = _get_combined_context(structured_context)
     cat_str = ", ".join(categories)
     instr = f"Describe this {cat_str} focusing on visual elements and context relationship."
+    if model_format == "gemini":
+        instr += """
+        Important guidelines:
+    1. Focus on describing key visual elements and their relationship to the context
+    2. Use clear, academic language appropriate for the content
+    3. Keep the description under 125 characters
+    4. If the image shows a diagram or figure, describe its key components and purpose
+    5. Include relevant technical terms from the context when appropriate
+    6. Consider how this image fits into the overall presentation theme
+    """
     p = f"Context: {ctx}\nExisting Alt: {existing_alt}\n{instr}\nAlt Text:"
     return f"<image>\n{p}" if model_format == "paligemma" else f"<image>\n{p}\nAnswer:"
 
