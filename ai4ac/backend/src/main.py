@@ -221,7 +221,7 @@ def rag_query(query: Dict[str, Any]):
     return {'query': q, 'hits': hits}
 
 @app.post("/alt-text/{file_id}")
-def update_alt_text( file_id: str, data: Dict[str, Any] = Body(description="Updates to image alt texts") ):
+async def update_alt_text( file_id: str, data: Dict[str, Any] = Body(description="Updates to image alt texts") ):
     # (function remains the same)
     json_path = os.path.join(PROCESSED_DIR, f"{file_id}.json")
     if not os.path.exists(json_path): raise HTTPException(status_code=404, detail="File processing data not found")
@@ -254,7 +254,7 @@ def update_alt_text( file_id: str, data: Dict[str, Any] = Body(description="Upda
     return {"status": "success", "updated_count": updated_count}
 
 @app.post("/api/regenerate-image/{file_id}")
-def regenerate_image(file_id: str, req: RegenerateRequest):
+async def regenerate_image(file_id: str, req: RegenerateRequest):
     """Forces the pipeline to re-run for a specific image using a manually selected category."""
     try:
         # 1. Find the original file
