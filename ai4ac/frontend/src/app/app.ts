@@ -39,7 +39,7 @@ export class AppComponent implements OnDestroy, AfterViewInit {
     'Table',
     'Figure',
     'Diagram',
-    'Chart',
+    'Graph',
     'Photo',
     'Needs Review'
   ];

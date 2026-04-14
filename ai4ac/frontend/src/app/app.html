@@ -91,8 +91,12 @@
                 <select [(ngModel)]="img.selectedPipeline" style="padding: 0.4rem; border-radius: 4px; border: 1px solid var(--border-color);">
                   <option *ngIf="img.classification?.length" [value]="img.classification[0]">{{ img.classification[0] }}</option>
                   <option value="General">General</option>
-                  <option value="Table">Table</option>
-                  <option value="Equation">Equation</option>
+                  <option *ngIf="img.classification?.length && img.classification[0] != 'Table'" value="Table">Table</option>
+                  <option *ngIf="img.classification?.length && img.classification[0] != 'Equation'" value="Equation">Equation</option>
+                  <option *ngIf="img.classification?.length && img.classification[0] != 'Graph'" value="Graph">Graph</option>
+                  <option *ngIf="img.classification?.length && img.classification[0] != 'Diagram'" value="Diagram">Diagram</option>
+                  <option *ngIf="img.classification?.length && img.classification[0] != 'Figure'" value="Figure">Figure</option>
+                  <option *ngIf="img.classification?.length && img.classification[0] != 'Map'" value="Map">Map</option>
                 </select>
 
                 <button class="primary" (click)="regeneratePipeline(img)" [disabled]="img.isRegenerating || (modelProvider === 'gemini' && !geminiApiKey)">

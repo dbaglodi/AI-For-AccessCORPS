@@ -238,7 +238,7 @@ def _get_combined_context(structured_context: Dict[str, Optional[str]]) -> str:
 
 def create_tagging_prompt(structured_context, model_format="paligemma"):
     ctx = _get_combined_context(structured_context)
-    prompt_base = "Categories: Graph, Chart, Map, Diagram, Table, Photograph, Text, Screenshot, Equation, Other. Respond ONLY with comma-separated names of applicable categories, RANKED by relevance."
+    prompt_base = "Categories: Graph, Map, Diagram, Table, Photograph, Text, Screenshot, Equation, Other. Respond ONLY with comma-separated names of applicable categories, RANKED by relevance."
     if model_format == "paligemma":
         return f"<image>\nContext: {ctx}\n{prompt_base}\nSelected Categories:"
     return f"<image>\nContext: {ctx}\nQuestion: {prompt_base}\nAnswer:"
@@ -246,7 +246,7 @@ def create_tagging_prompt(structured_context, model_format="paligemma"):
 def create_complex_data_alt_text_prompt(structured_context, categories, existing_alt, model_format="paligemma"):
     ctx = _get_combined_context(structured_context)
     cat_str = ", ".join(categories)
-    instr = f"Image Type: {cat_str}. 1. Identify main trend. 2. Describe axes. 3. DO NOT list individual points. 4. CRITICAL: Do not read labels literally; explain context."
+    instr = f"Image Type: {cat_str}. 1. Identify main trend. 2. Describe axes. 3. DO NOT list individual points. 4. CRITICAL: Do not read labels literally; explain context. 5. Keep the description under 300 characters"
     p = f"Context: {ctx}\nExisting Alt: {existing_alt}\n{instr}\nAlt Text:"
     return f"<image>\n{p}" if model_format == "paligemma" else f"<image>\n{p}\nAnswer:"
 
@@ -286,8 +286,8 @@ def classify_and_generate_alt_text(
     alt_text = ""
     mathml = ""
     categories = ["Other"]
-    complex_types = {"Graph", "Chart", "Map", "Table"}
-    valid_map = {c.lower(): c for c in ["Graph", "Chart", "Map", "Diagram", "Table", "Photograph", "Text", "Screenshot", "Equation", "Other"]}
+    complex_types = {"Graph", "Map", "Diagram"}
+    valid_map = {c.lower(): c for c in ["Graph", "Map", "Diagram", "Figure", "Table", "Photograph", "Text", "Screenshot", "Equation", "Other"]}
 
     gemini_success = False
 
