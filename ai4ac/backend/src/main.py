@@ -306,15 +306,11 @@ def regenerate_image(file_id: str, req: RegenerateRequest):
             drawing_elements = doc._element.xpath('.//w:drawing')
             if 1 <= req.image_idx <= len(drawing_elements):
                 target_shape = drawing_elements[req.image_idx - 1]
-                namespaces = {
-                    'a': 'http://schemas.openxmlformats.org/drawingml/2006/main',
-                    'c': 'http://schemas.openxmlformats.org/drawingml/2006/chart'
-                }
                 rId = None
-                blips = target_shape.xpath('.//a:blip/@r:embed', namespaces=namespaces)
+                blips = target_shape.xpath('.//a:blip/@r:embed')
                 if blips: rId = blips[0]
                 else:
-                    charts = target_shape.xpath('.//c:chart/@r:id', namespaces=namespaces)
+                    charts = target_shape.xpath('.//c:chart/@r:id')
                     if charts: rId = charts[0]
 
                 if rId:
@@ -397,7 +393,6 @@ def regenerate_image(file_id: str, req: RegenerateRequest):
                 
         elif req.forced_pipeline == "Table" and image_bytes:
             from src.pipelines.table_pipeline import extract_table_from_image, insert_table_into_docx, insert_table_into_pptx
-            import logging
             
             logging.info("--> ENTERED TABLE PIPELINE ROUTING")
             table_data = extract_table_from_image(image_bytes, provider=req.provider, api_key=req.api_key)
