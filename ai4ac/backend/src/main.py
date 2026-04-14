@@ -367,7 +367,7 @@ async def regenerate_image(file_id: str, req: RegenerateRequest):
 
         # Apply the new alt text to the original image XML
         if ext == ".docx":
-            docPr_elements = target_shape.xpath('.//wp:docPr', namespaces={'wp': 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing'})
+            docPr_elements = target_shape.xpath('.//wp:docPr')
             if docPr_elements:
                 docPr_elements[0].set('descr', new_alt_text)
                 doc_modified = True
@@ -495,17 +495,13 @@ def download_file(file_id: str):
                 tree = etree.parse(document_xml_path)
                 root = tree.getroot()
 
-                namespaces = {
-                    'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main',
-                    'wp': 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing'
-                }
                 
                 # 2. Iterate through drawings and apply alt text
-                drawings = root.xpath('.//w:drawing', namespaces=namespaces)
+                drawings = root.xpath('.//w:drawing')
                 for i, drawing in enumerate(drawings):
                     if i < len(results):
                         final_alt_text = results[i].get("final_alt_text", results[i].get("generated_alt_text", ""))
-                        docPr_elements = drawing.xpath('.//wp:docPr', namespaces=namespaces)
+                        docPr_elements = drawing.xpath('.//wp:docPr')
                         if docPr_elements:
                             docPr_elements[0].set('descr', final_alt_text)
 
