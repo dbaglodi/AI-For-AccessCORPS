@@ -496,12 +496,21 @@ def download_file(file_id: str):
                 root = tree.getroot()
 
                 
+                namespaces = {
+                    'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main',
+                    'wp': 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing'
+                }
+                
                 # 2. Iterate through drawings and apply alt text
-                drawings = root.xpath('.//w:drawing')
+                drawings = root.xpath('.//w:drawing', namespaces=namespaces) 
+                
                 for i, drawing in enumerate(drawings):
                     if i < len(results):
                         final_alt_text = results[i].get("final_alt_text", results[i].get("generated_alt_text", ""))
-                        docPr_elements = drawing.xpath('.//wp:docPr')
+                        
+                        # MUST include namespaces=namespaces here for lxml
+                        docPr_elements = drawing.xpath('.//wp:docPr', namespaces=namespaces) 
+                        
                         if docPr_elements:
                             docPr_elements[0].set('descr', final_alt_text)
 
