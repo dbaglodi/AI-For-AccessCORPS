@@ -1,4 +1,4 @@
-import { Component, OnDestroy, ElementRef, ViewChild, AfterViewInit, ChangeDetectorRef } from '@angular/core'; // Import ElementRef, ViewChild, AfterViewInit, ChangeDetectorRef
+import { Component, OnDestroy, ElementRef, ViewChild, AfterViewInit, ChangeDetectorRef, HostListener } from '@angular/core'; // Import ElementRef, ViewChild, AfterViewInit, ChangeDetectorRef
 import { HttpClient, HttpEventType, HttpResponse, HttpErrorResponse } from '@angular/common/http';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -28,6 +28,10 @@ export class AppComponent implements OnDestroy, AfterViewInit {
   processing = false;
   processingStatus: any = null;
   statusCheckSubscription: Subscription | null = null;
+  isModalOpen: boolean = false;
+  selectedModalImage: string | null = null;
+  selectedModalAlt: string = '';
+  zoomLevel: number = 1;
 
   // --- START MODIFICATION: Add ViewChild for carousel scrolling ---
   @ViewChild('cardsViewport') cardsViewportRef!: ElementRef<HTMLDivElement>;
@@ -47,6 +51,49 @@ export class AppComponent implements OnDestroy, AfterViewInit {
   // --- START MODIFICATION: Inject ChangeDetectorRef ---
   constructor(private http: HttpClient, private cdr: ChangeDetectorRef) { }
   // --- END MODIFICATION ---
+
+  @HostListener('document:keydown.escape')
+  handleEscapeKey() {
+    if (this.isModalOpen) {
+      this.closeImageModal();
+    }
+  }
+
+  openImageModal(imageUrl: string, altText: string) {
+    if (!imageUrl) return;
+    this.selectedModalImage = imageUrl;
+    this.selectedModalAlt = altText || 'Enlarged image';
+    this.zoomLevel = 1;
+    this.isModalOpen = true;
+    document.body.style.overflow = 'hidden'; // Prevent background scrolling while modal is open
+  }
+
+  closeImageModal(event?: Event) {
+    if (event) {
+      event.stopPropagation();
+    }
+    this.isModalOpen = false;
+    setTimeout(() => {
+      this.selectedModalImage = null;
+    }, 300); // Clear image after transition if you add CSS animations
+    document.body.style.overflow = ''; // Restore scrolling
+  }
+
+  zoomIn() {
+    if (this.zoomLevel < 4) {
+      this.zoomLevel += 0.25;
+    }
+  }
+
+  zoomOut() {
+    if (this.zoomLevel > 0.5) {
+      this.zoomLevel -= 0.25;
+    }
+  }
+
+  resetZoom() {
+    this.zoomLevel = 1;
+  }
 
   ngOnDestroy() {
     if (this.statusCheckSubscription) {
