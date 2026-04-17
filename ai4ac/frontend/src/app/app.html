@@ -76,9 +76,9 @@
               <span class="image-location" *ngIf="img.slide_num">Slide {{ img.slide_num }}</span>
             </div>
 
-            <div class="image-preview">
+            <div class="image-preview clickable" (click)="openImageModal(img.image_data, img.alt_text)" title="Click to enlarge">
               <img [src]="img.image_data" [alt]="img.alt_text || 'Image preview'" loading="lazy" />
-              <!-- Added loading="lazy" -->
+              <div class="zoom-hint">Enlarge</div>
             </div>
 
             <div class="meta-row">
@@ -145,6 +145,23 @@
         </button>
       </div>
     </form>
+  </div>
+</div>
+
+<div class="image-modal-overlay" *ngIf="isModalOpen" (click)="closeImageModal($event)">
+  <div class="modal-toolbar" (click)="$event.stopPropagation()">
+    <div class="zoom-controls">
+      <button class="icon-btn" (click)="zoomOut()" [disabled]="zoomLevel <= 0.5" title="Zoom Out">−</button>
+      <span class="zoom-level">{{ zoomLevel * 100 | number:'1.0-0' }}%</span>
+      <button class="icon-btn" (click)="zoomIn()" [disabled]="zoomLevel >= 4" title="Zoom In">+</button>
+      <button class="text-btn" (click)="resetZoom()">Reset</button>
+    </div>
+    <button class="close-btn" (click)="closeImageModal($event)" title="Close (Esc)">×</button>
+  </div>
+
+  <div class="modal-image-wrapper" (click)="$event.stopPropagation()">
+    <img [src]="selectedModalImage" [alt]="selectedModalAlt" [style.transform]="'scale(' + zoomLevel + ')'"
+      class="modal-image" />
   </div>
 </div>
 
@@ -419,6 +436,159 @@
     background-color: #f0f0f0;
     /* Light background for transparent images */
   }
+
+  .image-preview.clickable {
+  position: relative;
+  cursor: zoom-in;
+  overflow: hidden;
+  border-radius: 4px;
+}
+
+.image-preview.clickable img {
+  transition: opacity 0.2s;
+}
+
+.image-preview.clickable:hover img {
+  opacity: 0.85;
+}
+
+.zoom-hint {
+  position: absolute;
+  bottom: 10px;
+  right: 10px;
+  background: rgba(0, 0, 0, 0.7);
+  color: white;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  pointer-events: none;
+}
+
+.image-preview.clickable:hover .zoom-hint {
+  opacity: 1;
+}
+
+/* --- Image Modal Styles --- */
+.image-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background-color: rgba(0, 0, 0, 0.9);
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  backdrop-filter: blur(3px);
+}
+
+.modal-toolbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  padding: 15px 25px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: linear-gradient(to bottom, rgba(0,0,0,0.8) 0%, rgba(0,0,0,0) 100%);
+  z-index: 10000;
+  box-sizing: border-box;
+}
+
+.zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(255, 255, 255, 0.1);
+  padding: 6px 12px;
+  border-radius: 8px;
+  backdrop-filter: blur(4px);
+}
+
+.zoom-controls .icon-btn {
+  background: transparent;
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 4px;
+  width: 32px;
+  height: 32px;
+  font-size: 1.2rem;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+}
+
+.zoom-controls .icon-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.zoom-controls .icon-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.zoom-controls .text-btn {
+  background: transparent;
+  color: white;
+  border: none;
+  font-size: 0.9rem;
+  cursor: pointer;
+  padding: 0 8px;
+}
+
+.zoom-controls .text-btn:hover {
+  text-decoration: underline;
+}
+
+.zoom-level {
+  color: white;
+  min-width: 45px;
+  text-align: center;
+  font-weight: 500;
+  font-size: 0.9rem;
+}
+
+.close-btn {
+  background: transparent;
+  color: white;
+  border: none;
+  font-size: 2.5rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 10px;
+  transition: transform 0.2s;
+}
+
+.close-btn:hover {
+  transform: scale(1.1);
+  color: #ff4d4d;
+}
+
+.modal-image-wrapper {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  padding: 80px 20px 20px 20px; /* Padding top accounts for toolbar */
+  box-sizing: border-box;
+}
+
+.modal-image {
+  max-width: 90vw;
+  max-height: 85vh;
+  object-fit: contain;
+  transition: transform 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
+  transform-origin: center center;
+}
 
   .meta-row {
     display: flex;
