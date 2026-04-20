@@ -164,6 +164,38 @@
   </div>
 </div>
 
+<div class="modal-overlay" *ngIf="showPptxModal">
+  <div class="modal-content">
+    <h2>PowerPoint Processing Options</h2>
+    <p>Do you want to process the entire presentation or a specific range of slides?</p>
+
+    <div class="radio-group">
+      <label>
+        <input type="radio" name="slideRange" [value]="true" [(ngModel)]="processAllSlides"> Entire Presentation
+      </label>
+      <label>
+        <input type="radio" name="slideRange" [value]="false" [(ngModel)]="processAllSlides"> Custom Slide Range
+      </label>
+    </div>
+
+    <div class="range-inputs" *ngIf="!processAllSlides">
+      <label>
+        Start Slide:
+        <input type="number" [(ngModel)]="startSlide" min="1" placeholder="e.g., 1">
+      </label>
+      <label>
+        End Slide:
+        <input type="number" [(ngModel)]="endSlide" min="1" placeholder="e.g., 10">
+      </label>
+    </div>
+
+    <div class="modal-actions">
+      <button class="secondary" (click)="cancelPptxModal()">Cancel</button>
+      <button class="primary" (click)="confirmPptxUpload()">Start Processing</button>
+    </div>
+  </div>
+</div>
+
 <!-- Keep embedded styles for simplicity -->
 <style>
   :host {

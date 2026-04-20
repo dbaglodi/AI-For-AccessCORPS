@@ -32,6 +32,10 @@ export class AppComponent implements OnDestroy, AfterViewInit {
   selectedModalImage: string | null = null;
   selectedModalAlt: string = '';
   zoomLevel: number = 1;
+  showPptxModal: boolean = false;
+  processAllSlides: boolean = true;
+  startSlide: number | null = null;
+  endSlide: number | null = null;
 
   // --- START MODIFICATION: Add ViewChild for carousel scrolling ---
   @ViewChild('cardsViewport') cardsViewportRef!: ElementRef<HTMLDivElement>;
@@ -136,31 +140,52 @@ export class AppComponent implements OnDestroy, AfterViewInit {
 
   uploadFile() {
     if (!this.selectedFile) return;
+
+    // Check if the file is a PowerPoint
+    if (this.selectedFile.name.toLowerCase().endsWith('.pptx')) {
+      this.showPptxModal = true;
+      this.processAllSlides = true; // Default to full presentation
+      this.startSlide = null;
+      this.endSlide = null;
+    } else {
+      // If it's a DOCX, proceed straight to upload
+      this.executeUpload();
+    }
+  }
+
+  cancelPptxModal() {
+    this.showPptxModal = false;
+  }
+
+  confirmPptxUpload() {
+    this.showPptxModal = false;
+    this.executeUpload();
+  }
+
+  executeUpload() {
     this.resetState();
 
     const formData = new FormData();
-    formData.append('file', this.selectedFile);
+    formData.append('file', this.selectedFile!);
     formData.append('provider', this.modelProvider);
     if (this.modelProvider === 'gemini' && this.geminiApiKey) {
       formData.append('api_key', this.geminiApiKey);
     }
+
+    // Append slide range if user selected Custom Range
+    if (this.selectedFile?.name.toLowerCase().endsWith('.pptx') && !this.processAllSlides) {
+      if (this.startSlide) formData.append('start_slide', this.startSlide.toString());
+      if (this.endSlide) formData.append('end_slide', this.endSlide.toString());
+    }
+
     this.processing = true;
-    // --- START MODIFICATION: Set initial processing status differently ---
-    this.processingStatus = { current_step: 'Uploading file...' }; // Simpler initial status
-    // --- END MODIFICATION ---
+    this.processingStatus = { current_step: 'Uploading file...' };
 
     this.http.post<any>(`${this.apiUrl}/upload`, formData, {
       reportProgress: true,
       observe: 'events'
     }).subscribe({
       next: event => {
-        // --- START MODIFICATION: Remove uploadProgress handling ---
-        // if (event.type === HttpEventType.UploadProgress && event.total) {
-        //   // this.uploadProgress = Math.round(100 * event.loaded / event.total); // Removed
-        //   // Update status minimally during upload if needed, but remove progress bar value
-        //   this.processingStatus = { current_step: 'Uploading...', progress: undefined };
-        // } else
-        // --- END MODIFICATION ---
         if (event.type === HttpEventType.Response) {
           this.fileId = event.body.file_id;
           console.log(`Upload complete. File ID: ${this.fileId}. Starting status check.`);

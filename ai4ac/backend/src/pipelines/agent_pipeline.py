@@ -444,7 +444,7 @@ def get_context_for_image_docx(doc: Document, inline_shape) -> Dict[str, Optiona
 
 # --- Main Entry Point ---
 
-def run_agent_pipeline(file_path, ext, progress_callback=None, provider="local", api_key=None, **kwargs):
+def run_agent_pipeline(file_path, ext, progress_callback=None, provider="local", api_key=None, start_slide=None, end_slide=None, **kwargs):
     gpu_settings = get_gpu_settings()
     primary_model = get_primary_model(provider=provider)
     results = []
@@ -481,16 +481,22 @@ def run_agent_pipeline(file_path, ext, progress_callback=None, provider="local",
             images = []
             pres_modified = False 
             
-            # 1. Use the expanded list to find all visual data
             valid_types = [
                 MSO_SHAPE_TYPE.PICTURE, 
                 MSO_SHAPE_TYPE.LINKED_PICTURE,
                 MSO_SHAPE_TYPE.CHART, 
-                MSO_SHAPE_TYPE.IGX_GRAPHIC, # SmartArt
+                MSO_SHAPE_TYPE.IGX_GRAPHIC, 
                 MSO_SHAPE_TYPE.GROUP
             ]
 
             for slide_num, slide in enumerate(pres.slides, 1):
+                # --- ADD SLIDE RANGE FILTERING HERE ---
+                if start_slide is not None and slide_num < start_slide:
+                    continue
+                if end_slide is not None and slide_num > end_slide:
+                    continue
+                # --------------------------------------
+                
                 for shape in slide.shapes:
                     if getattr(shape, "shape_type", None) in valid_types:
                         images.append((slide_num, shape))

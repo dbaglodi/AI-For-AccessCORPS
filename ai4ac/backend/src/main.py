@@ -108,7 +108,9 @@ async def upload_file(
     background_tasks: BackgroundTasks, 
     file: UploadFile = File(description="Document file to process"),
     provider: str = Form("local"),
-    api_key: Optional[str] = Form(None)
+    api_key: Optional[str] = Form(None),
+    start_slide: Optional[int] = Form(None), # Added
+    end_slide: Optional[int] = Form(None)    # Added
 ):
     # (function remains the same)
     if not file: raise HTTPException(status_code=400, detail="No file uploaded")
@@ -130,7 +132,7 @@ async def upload_file(
             processing_status[file_id].update({"status": "error", "error": str(e), "updated_at": datetime.now().isoformat()})
             raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
         finally: await file.close()
-        background_tasks.add_task(process_document, file_id, save_path, ext, provider, api_key)
+        background_tasks.add_task(process_document, file_id, save_path, ext, provider, api_key, start_slide, end_slide) # Updated
         return {"file_id": file_id, "filename": file.filename}
     except HTTPException: raise
     except Exception as e:
@@ -138,7 +140,7 @@ async def upload_file(
             processing_status[file_id].update({"status": "error", "error": str(e), "updated_at": datetime.now().isoformat()})
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
-def process_document(file_id: str, save_path: str, ext: str, provider: str = "local", api_key: Optional[str] = None):
+def process_document(file_id: str, save_path: str, ext: str, provider: str = "local", api_key: Optional[str] = None, start_slide: Optional[int] = None, end_slide: Optional[int] = None):
     # (function remains the same)
     try:
         processing_status[file_id].update({"current_step": "Extracting images/context", "progress": 30, "updated_at": datetime.now().isoformat()})
@@ -148,7 +150,8 @@ def process_document(file_id: str, save_path: str, ext: str, provider: str = "lo
         results = run_agent_pipeline( save_path, ext,
             progress_callback=lambda step, prog, total: update_processing_status(file_id, step, prog, total),
             partial_save_dir=partial_dir, rag_strategy=rag_strategy,
-            provider=provider, api_key=api_key )
+            provider=provider, api_key=api_key, 
+            start_slide=start_slide, end_slide=end_slide ) # Passed to pipeline
         with open(os.path.join(PROCESSED_DIR, f"{file_id}.json"), "w", encoding="utf-8") as f: json.dump(results, f)
         processing_status[file_id].update({"status": "completed", "progress": 100, "current_step": "Processing complete",
                                            "updated_at": datetime.now().isoformat()})
