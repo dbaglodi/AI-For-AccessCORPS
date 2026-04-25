@@ -442,6 +442,27 @@ def get_context_for_image_docx(doc: Document, inline_shape) -> Dict[str, Optiona
     except: pass
     return ctx
 
+def generate_slide_title(context_text: str, provider: str, api_key: str) -> str:
+    """Generates a slide title if none exists."""
+    if not context_text or not context_text.strip():
+        return "Untitled Slide"
+
+    if provider == "gemini" and api_key:
+        try:
+            import google.generativeai as genai
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel('gemini-2.5-flash-lite')
+            resp = model.generate_content(
+                f"Generate a short, descriptive title (maximum 6 words) summarizing this slide content: {context_text[:500]}. Respond ONLY with the title."
+            )
+            return resp.text.strip().replace('"', '').replace('\n', ' ')[:60]
+        except Exception as e:
+            logger.error(f"Gemini title gen failed: {e}")
+
+    # Fallback heuristic: Take the first few words
+    words = context_text.split()
+    return " ".join(words[:6]).strip() + ("..." if len(words) > 6 else "")
+
 # --- Main Entry Point ---
 
 def run_agent_pipeline(file_path, ext, progress_callback=None, provider="local", api_key=None, start_slide=None, end_slide=None, **kwargs):
@@ -479,7 +500,8 @@ def run_agent_pipeline(file_path, ext, progress_callback=None, provider="local",
         if ext == ".pptx":
             pres = Presentation(file_path)
             images = []
-            pres_modified = False 
+            pres_modified = False
+            slide_generated_titles = {}
             
             valid_types = [
                 MSO_SHAPE_TYPE.PICTURE, 
@@ -511,6 +533,19 @@ def run_agent_pipeline(file_path, ext, progress_callback=None, provider="local",
                         alt = cNvPr_elements[0].get('descr', '')
 
                     ctx = get_context_for_image_pptx(pres.slides[slide_num-1], shape)
+
+                    slide_title = ctx.get("slide_title")
+                    is_generated_title = False
+
+                    if not slide_title:
+                        if slide_num in slide_generated_titles:
+                            slide_title, is_generated_title = slide_generated_titles[slide_num]
+                        else:
+                            slide_title = generate_slide_title(ctx.get("surrounding_text"), provider, api_key)
+                            is_generated_title = True
+                            slide_generated_titles[slide_num] = (slide_title, is_generated_title)
+                    else:
+                        slide_generated_titles[slide_num] = (slide_title, False)
                     
                     # 3. Safely extract image bytes (Handle Charts/Groups)
                     image_bytes = None
@@ -555,7 +590,7 @@ def run_agent_pipeline(file_path, ext, progress_callback=None, provider="local",
                         disp_bytes = shape.image.blob # Best effort
                     
                     img_data = base64.b64encode(disp_bytes).decode()
-                    results.append({"classification": cats, "alt_text": alt, "generated_alt_text": gen_alt, "image_idx": i, "slide_num": slide_num, "image_data": f"data:image/jpeg;base64,{img_data}"})
+                    results.append({"classification": cats, "alt_text": alt, "generated_alt_text": gen_alt, "image_idx": i, "slide_num": slide_num, "slide_title": slide_title, "is_generated_title": is_generated_title, "image_data": f"data:image/jpeg;base64,{img_data}"})
                 except Exception as inner_e:
                     logger.error(f"Error on pptx image {i}: {inner_e}")
                     results.append({"classification": ["Needs Review"], "alt_text": "", "generated_alt_text": f"Error: {inner_e}", "image_idx": i, "slide_num": slide_num})

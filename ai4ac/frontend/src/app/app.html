@@ -74,7 +74,22 @@
               <strong>Image {{ i + 1 }}</strong>
               <span class="image-location" *ngIf="img.slide_num">Slide {{ img.slide_num }}</span>
             </div>
-
+          
+            <div class="slide-title-section" *ngIf="img.slide_num" style="margin-bottom: 1rem;">
+              <label [for]="'slide-title-' + i"
+                style="display: block; font-weight: 500; font-size: 0.9em; margin-bottom: 0.25rem;">
+                Slide Title
+              </label>
+              <div style="display: flex; gap: 10px; align-items: center;">
+                <input type="text" [id]="'slide-title-' + i" [(ngModel)]="img.slide_title"
+                  (ngModelChange)="onSlideTitleChange(img, $event)" class="slide-title-input" placeholder="Enter Slide Title"
+                  style="flex-grow: 1; padding: 0.5rem; border: 1px solid var(--border-color); border-radius: 4px;" />
+                <span *ngIf="img.is_generated_title"
+                  style="background-color: var(--primary-color); color: white; padding: 0.2rem 0.5rem; border-radius: 12px; font-size: 0.75rem; white-space: nowrap;">
+                  Auto-Generated
+                </span>
+              </div>
+            </div>
             <div class="image-preview clickable" (click)="openImageModal(img.image_data, img.alt_text)" title="Click to enlarge">
               <img [src]="img.image_data" [alt]="img.alt_text || 'Image preview'" loading="lazy" />
               <div class="zoom-hint">Enlarge</div>

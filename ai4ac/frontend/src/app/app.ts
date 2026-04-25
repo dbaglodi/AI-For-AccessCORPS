@@ -252,11 +252,24 @@ export class AppComponent implements OnDestroy, AfterViewInit {
     return {
       ...img,
       userAltText: img.generated_alt_text || img.alt_text || '',
+      slide_title: img.slide_title || '',
+      is_generated_title: img.is_generated_title || false,
       classification: classifications,
       // explicitly set the initial dropdown value so it doesn't render blank
       selectedPipeline: classifications.length > 0 ? classifications[0] : 'Needs Review',
       originalIndex: index
     };
+  }
+
+  onSlideTitleChange(changedImg: any, newTitle: string) {
+    if (!changedImg.slide_num) return;
+    
+    this.images.forEach(img => {
+      // Sync the new title to all other images that share the same slide_num
+      if (img.slide_num === changedImg.slide_num && img !== changedImg) {
+        img.slide_title = newTitle;
+      }
+    });
   }
 
   fetchImages(isFinalFetch: boolean) {
@@ -357,7 +370,8 @@ export class AppComponent implements OnDestroy, AfterViewInit {
 
     const updates = this.images.map(img => ({
       image_idx: img.image_idx,
-      alt_text: img.userAltText
+      alt_text: img.userAltText,
+      slide_title: img.slide_title
     }));
 
     this.http.post<any>(`${this.apiUrl}/alt-text/${this.fileId}`, { updates }).subscribe({

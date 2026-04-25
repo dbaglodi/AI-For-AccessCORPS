@@ -224,7 +224,7 @@ def rag_query(query: Dict[str, Any]):
     return {'query': q, 'hits': hits}
 
 @app.post("/alt-text/{file_id}")
-async def update_alt_text( file_id: str, data: Dict[str, Any] = Body(description="Updates to image alt texts") ):
+async def update_alt_text(file_id: str, data: Dict[str, Any] = Body(description="Updates to image alt texts")):
     # (function remains the same)
     json_path = os.path.join(PROCESSED_DIR, f"{file_id}.json")
     if not os.path.exists(json_path): raise HTTPException(status_code=404, detail="File processing data not found")
@@ -238,15 +238,18 @@ async def update_alt_text( file_id: str, data: Dict[str, Any] = Body(description
     if len(updates) != len(results):
          logging.warning(f"Update/results count mismatch for {file_id} ({len(updates)} vs {len(results)}). Proceeding cautiously.")
 
-    for i, update_data in enumerate(updates):
-        if i < len(results):
-            # Use the user-provided text if available, otherwise keep the generated one
-            final_text = update_data.get("alt_text") # Assuming frontend sends edited text in 'alt_text'
-            if final_text is not None: # Check if the key exists, even if the value is empty string
-                results[i]["final_alt_text"] = final_text
-                updated_count += 1
-            elif "final_alt_text" not in results[i]: # If user didn't edit AND it wasn't set before
-                results[i]["final_alt_text"] = results[i].get("generated_alt_text", "") # Default to generated
+    for update_data in updates:
+        idx = update_data.get("image_idx")
+        target = next((r for r in results if r.get("image_idx") == idx), None)
+        if target:
+            if "alt_text" in update_data:
+                target["final_alt_text"] = update_data["alt_text"]
+            elif "final_alt_text" not in target:
+                target["final_alt_text"] = target.get("generated_alt_text", "")
+            
+            # Catch the synchronized slide title
+            if "slide_title" in update_data:
+                target["final_slide_title"] = update_data["slide_title"]
 
     try:
         with open(json_path, "w", encoding="utf-8") as f: json.dump(results, f)
@@ -502,7 +505,6 @@ def download_file(file_id: str):
                 tree = etree.parse(document_xml_path)
                 root = tree.getroot()
 
-                
                 namespaces = {
                     'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main',
                     'wp': 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing'
@@ -536,11 +538,32 @@ def download_file(file_id: str):
                 shutil.rmtree(temp_dir)
 
         elif ext == ".pptx":
+            from pptx.util import Inches
             pres = Presentation(orig_path)
             valid_types = [
                 MSO_SHAPE_TYPE.PICTURE, MSO_SHAPE_TYPE.LINKED_PICTURE,
                 MSO_SHAPE_TYPE.CHART, MSO_SHAPE_TYPE.IGX_GRAPHIC, MSO_SHAPE_TYPE.GROUP
             ]
+            
+            # --- NEW: Apply slide titles before injecting alt text ---
+            slide_titles_to_apply = {}
+            for res in results:
+                if res.get("slide_num") and "final_slide_title" in res:
+                    slide_titles_to_apply[res["slide_num"]] = res["final_slide_title"]
+
+            for slide_idx, slide in enumerate(pres.slides, 1):
+                if slide_idx in slide_titles_to_apply:
+                    new_title = slide_titles_to_apply[slide_idx]
+                    if slide.shapes.title:
+                        # Overwrite existing title
+                        slide.shapes.title.text = new_title
+                    else:
+                        # Create hidden title off-screen (-10 inches) so screen readers read it, but it's not visible
+                        txBox = slide.shapes.add_textbox(Inches(-10), Inches(-10), Inches(8), Inches(1))
+                        txBox.text = new_title
+                        txBox.name = "Hidden Generated Slide Title"
+
+            # --- EXISTING: Apply alt text to shapes ---
             shapes_processed = 0
             for slide in pres.slides:
                 for shape in slide.shapes:
