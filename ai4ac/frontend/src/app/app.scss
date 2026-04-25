@@ -158,20 +158,34 @@ button {
 
 .cards-viewport {
   overflow-x: auto;
-  overflow-y: hidden;
+  overflow-y: visible;
+  /* Prevents card shadows from being clipped */
   white-space: nowrap;
   padding: 1rem 0;
+  scroll-behavior: smooth;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
 }
 
 .cards {
   display: flex;
-  gap: 1rem;
+  gap: 1.5rem;
   min-width: 100%;
+
+  &::before,
+  &::after {
+    content: '';
+    flex: 0 0 max(calc(50% - 225px), 1rem);
+  }
 }
 
 .card-wrapper {
-  flex: 0 0 400px;
+  flex: 0 0 calc(100% - 2rem);
+  max-width: 450px;
+  scroll-snap-align: center;
   white-space: normal;
+  /* Allows text to wrap inside the card */
+  box-sizing: border-box;
 }
 
 .image-card {

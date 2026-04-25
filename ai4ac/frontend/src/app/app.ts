@@ -390,26 +390,30 @@ export class AppComponent implements OnDestroy, AfterViewInit {
   scrollToActiveIndex() {
     // Use timeout to allow Angular to update the view *before* scrolling
     setTimeout(() => {
-      if (this.cardsViewportRef && this.cardsContainerRef) {
-        const viewport = this.cardsViewportRef.nativeElement;
+      if (this.cardsContainerRef) {
         const container = this.cardsContainerRef.nativeElement;
-        const cardElements = container.children;
+        
+        // querySelectorAll is safesr than .children when dealing with pseudo-elements/Angular comments
+        const cardElements = container.querySelectorAll('.card-wrapper');
+        
         if (cardElements.length > this.activeIndex) {
           const activeCard = cardElements[this.activeIndex] as HTMLElement;
-          const scrollLeft = activeCard.offsetLeft - viewport.offsetLeft; // Calculate scroll position based on card offset
-
-          viewport.scrollTo({
-            left: scrollLeft,
-            behavior: 'smooth'
+          
+          // Let the browser handle the centering math natively
+          activeCard.scrollIntoView({
+            behavior: 'smooth',
+            inline: 'center',
+            block: 'nearest' // Prevents vertical page jumps
           });
-          console.log(`Scrolled to index ${this.activeIndex} at position ${scrollLeft}`);
+          
+          console.log(`Scrolled to center index ${this.activeIndex}`);
         } else {
           console.warn(`Card element for index ${this.activeIndex} not found.`);
         }
       } else {
-        console.warn("Viewport or container ref not available for scrolling.");
+        console.warn("Container ref not available for scrolling.");
       }
-    }, 50); // Small delay might be needed
+    }, 50);
   }
   // --- END MODIFICATION ---
 
