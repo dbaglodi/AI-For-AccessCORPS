@@ -387,13 +387,12 @@
     min-width: 100%;
   }
 
-  /* Add flexible spacers so the first and last cards can physically reach the center */
   .cards::before,
   .cards::after {
     content: '';
-    /* 225px is exactly half of your 450px max-width card.
-       This dynamically pads the scroll area perfectly based on screen size! */
-    flex: 0 0 max(calc(50% - 225px), 1rem); 
+    /* Fix: Use 50vw instead of 50%. 
+       50% scales with the total width of all cards combined! */
+    flex: 0 0 max(calc(50vw - 225px), 1rem); 
   }
 
   .card-wrapper {

@@ -105,14 +105,11 @@ export class AppComponent implements OnDestroy, AfterViewInit {
     }
   }
 
-  // --- START MODIFICATION: Implement AfterViewInit for potential initial scroll ---
   ngAfterViewInit() {
-    // If images are loaded initially (e.g., from state), ensure scroll position is correct
     if (this.images.length > 0) {
-      this.scrollToActiveIndex();
+      this.scrollToActiveIndex(false); // Instant snap on initial load
     }
   }
-  // --- END MODIFICATION ---
 
 
   onFileSelected(event: any) {
@@ -281,7 +278,11 @@ export class AppComponent implements OnDestroy, AfterViewInit {
           this.loadingImages = false;
           this.stopStatusCheck();
           this.cdr.detectChanges(); // Trigger change detection
-          this.scrollToActiveIndex(); // Scroll after view updates
+          
+          // --- MODIFIED LINE HERE ---
+          // Pass 'false' to instantly snap the first card to the center without animation
+          this.scrollToActiveIndex(false); 
+          
         } else if (res.status === 'processing' || res.status === 'uploading') {
           this.processing = true;
           if (Array.isArray(res.images)) {
@@ -304,7 +305,7 @@ export class AppComponent implements OnDestroy, AfterViewInit {
       }
     });
   }
-
+  
   sortImages(imageList: any[]): any[] {
     return imageList.sort((a, b) => {
       if (a.slide_num !== b.slide_num && a.slide_num != null && b.slide_num != null) {
@@ -322,32 +323,29 @@ export class AppComponent implements OnDestroy, AfterViewInit {
     if (!receivedImages || receivedImages.length === 0) return;
 
     let newImagesAdded = false;
+    const wasEmpty = this.images.length === 0; // Check if UI was empty before loop
     const existingIds = new Set(this.images.map(img => img.image_idx).filter(id => id != null));
 
     for (const newImg of receivedImages) {
-      // Use image_idx if available, otherwise assume it's new if not deeply equal to an existing one
       const isNew = newImg.image_idx != null
         ? !existingIds.has(newImg.image_idx)
-        : !this.images.some(existingImg => JSON.stringify(existingImg) === JSON.stringify(newImg)); // Less efficient fallback
+        : !this.images.some(existingImg => JSON.stringify(existingImg) === JSON.stringify(newImg));
 
       if (isNew) {
-        // --- START MODIFICATION: Use helper for mapping ---
         this.images.push(this.mapImageData(newImg, this.images.length));
-        // --- END MODIFICATION ---
-
-        if (newImg.image_idx != null) {
-          existingIds.add(newImg.image_idx);
-        }
+        if (newImg.image_idx != null) existingIds.add(newImg.image_idx);
         newImagesAdded = true;
       }
     }
 
     if (newImagesAdded) {
-      this.images = this.sortImages(this.images); // Re-sort after adding
-      console.log(`Appended/Sorted images. Total now: ${this.images.length}`);
-      // Don't auto-scroll here, let the status loop handle final scroll
-      // Force update the view if necessary
+      this.images = this.sortImages(this.images); 
       this.cdr.detectChanges();
+      
+      if (wasEmpty) {
+         // If this is the first image added to the UI, center it instantly
+         this.scrollToActiveIndex(false);
+      }
     }
   }
 
@@ -378,40 +376,33 @@ export class AppComponent implements OnDestroy, AfterViewInit {
   // --- START MODIFICATION: Updated setActive and scrolling ---
   setActive(i: number) {
     if (this.images.length === 0) return;
-    // Handle wrapping
     const newIndex = (i + this.images.length) % this.images.length;
 
     if (this.activeIndex !== newIndex) {
       this.activeIndex = newIndex;
-      this.scrollToActiveIndex();
+      this.scrollToActiveIndex(true); // Smooth scroll when navigating
     }
   }
 
-  scrollToActiveIndex() {
+  scrollToActiveIndex(smooth: boolean = true, retryCount: number = 0) {
     // Use timeout to allow Angular to update the view *before* scrolling
     setTimeout(() => {
       if (this.cardsContainerRef) {
         const container = this.cardsContainerRef.nativeElement;
-        
-        // querySelectorAll is safesr than .children when dealing with pseudo-elements/Angular comments
         const cardElements = container.querySelectorAll('.card-wrapper');
         
         if (cardElements.length > this.activeIndex) {
           const activeCard = cardElements[this.activeIndex] as HTMLElement;
           
-          // Let the browser handle the centering math natively
           activeCard.scrollIntoView({
-            behavior: 'smooth',
+            behavior: smooth ? 'smooth' : 'auto', // 'auto' snaps instantly on first load
             inline: 'center',
-            block: 'nearest' // Prevents vertical page jumps
+            block: 'nearest'
           });
-          
-          console.log(`Scrolled to center index ${this.activeIndex}`);
-        } else {
-          console.warn(`Card element for index ${this.activeIndex} not found.`);
+        } else if (retryCount < 5) {
+          // If Angular hasn't rendered the *ngFor items yet, wait and try again
+          this.scrollToActiveIndex(smooth, retryCount + 1);
         }
-      } else {
-        console.warn("Container ref not available for scrolling.");
       }
     }, 50);
   }
