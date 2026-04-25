@@ -159,29 +159,41 @@ def extract_equations_from_image(image_bytes: bytes, provider: str = "local", ap
         return []
 
 
-def insert_equation_into_docx(doc, inline_shape_element, equations: list[str]):
+def insert_equation_into_docx(doc, target_shape, equations: list[str]):
     """
     Finds the paragraph containing the image and inserts equations directly after it.
-    Unchanged from original.
     """
-    if not add_math or not equations:
+    if not equations:
         return
 
     target_paragraph = None
-    for p in doc.paragraphs:
-        if inline_shape_element in p._element.xpath('.//wp:inline'):
-            target_paragraph = p
-            break
-
+    
+    # 1. target_shape is the <w:drawing> element. We find its parent paragraph <w:p>
+    parent_p_elements = target_shape.xpath('./ancestor::w:p')
+    if parent_p_elements:
+        p_element = parent_p_elements[0]
+        # 2. Find the corresponding python-docx Paragraph object
+        for p in doc.paragraphs:
+            if p._element == p_element:
+                target_paragraph = p
+                break
+    
     if target_paragraph:
         for eq in equations:
             try:
+                # Insert a new paragraph
                 new_p = target_paragraph.insert_paragraph_before("")
+                # Move it to appear immediately AFTER the image's paragraph
                 target_paragraph._p.addnext(new_p._p)
-                add_math(new_p, eq)
+                
+                # 3. If math2docx is installed, format it properly. Otherwise, fall back to plain text.
+                if add_math:
+                    add_math(new_p, eq)
+                else:
+                    new_p.add_run(f"[Extracted Equation]: {eq}")
             except Exception as e:
                 logger.warning(f"Failed to add MathML, falling back to text: {e}")
-                new_p.add_run(f"[Equation]: {eq}")
+                new_p.add_run(f"[Extracted Equation]: {eq}")
 
 def insert_equation_into_pptx(slide, shape, equations: list[str]):
     """
