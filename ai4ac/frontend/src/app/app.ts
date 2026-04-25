@@ -447,6 +447,7 @@ export class AppComponent implements OnDestroy, AfterViewInit {
     this.http.post<any>(`${this.apiUrl}/api/regenerate-image/${this.fileId}`, payload).subscribe({
       next: (response) => {
         img.generated_alt_text = response.new_alt_text || response.generated_alt_text; // Ensure we grab new_alt_text 
+        img.userAltText = img.generated_alt_text;
         
         // Update the classification array to show the new forced pipeline first
         if (img.classification && response.pipeline_used) {
