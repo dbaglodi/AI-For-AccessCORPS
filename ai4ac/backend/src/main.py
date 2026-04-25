@@ -381,14 +381,18 @@ async def regenerate_image(file_id: str, req: RegenerateRequest):
                 doc_modified = True
 
         if req.forced_pipeline == "Equation" and image_bytes:
-            from src.pipelines.equation_pipeline import extract_equations_from_image, insert_equation_into_docx
+            # --- START MODIFICATION ---
+            from src.pipelines.equation_pipeline import extract_equations_from_image, insert_equation_into_docx, insert_equation_into_pptx
             equations = extract_equations_from_image(image_bytes, provider=req.provider, api_key=req.api_key)
             if equations:
                 if ext == ".docx":
-                    # Fallback insertion (since shape is raw XML now)
-                    pass 
+                    insert_equation_into_docx(doc, target_shape, equations)
+                    doc_modified = True
+                elif ext == ".pptx":
+                    insert_equation_into_pptx(slide_target, target_shape, equations)
+                    doc_modified = True
+            # --- END MODIFICATION ---
             else:
-                # --- NEW: Bubble up Equation failure to the frontend ---
                 raise HTTPException(
                     status_code=422, 
                     detail="Equation extraction failed: Could not identify mathematical content in the image."

@@ -128,7 +128,12 @@ def _extract_equations_with_gemini(image_bytes: bytes, api_key: str) -> list[str
         )
         
         response = model.generate_content([prompt, img])
-        return _sanitize_equations(response.text)
+        
+        # --- ADD THESE LINES TO CLEAN GEMINI'S OUTPUT ---
+        raw_text = response.text
+        raw_text = raw_text.replace("```latex", "").replace("```", "").replace("$", "")
+        
+        return _sanitize_equations(raw_text)
     except Exception as e:
         logger.error(f"Gemini equation extraction failed: {e}")
         return []
@@ -177,3 +182,33 @@ def insert_equation_into_docx(doc, inline_shape_element, equations: list[str]):
             except Exception as e:
                 logger.warning(f"Failed to add MathML, falling back to text: {e}")
                 new_p.add_run(f"[Equation]: {eq}")
+
+def insert_equation_into_pptx(slide, shape, equations: list[str]):
+    """
+    Inserts extracted LaTeX equations into a new text box on the PowerPoint slide,
+    positioned just below the original image.
+    """
+    if not equations:
+        return
+
+    try:
+        from pptx.util import Pt
+        
+        # Position the text box slightly below the original image
+        left = getattr(shape, "left", Pt(100))
+        top = getattr(shape, "top", Pt(100)) + getattr(shape, "height", Pt(100)) + Pt(10)
+        width = getattr(shape, "width", Pt(300))
+        
+        # Approximate height based on number of equations
+        height = Pt(30 * len(equations))
+        
+        txBox = slide.shapes.add_textbox(left, top, width, height)
+        tf = txBox.text_frame
+        tf.text = "[Extracted Equation]:"
+        
+        for eq in equations:
+            p = tf.add_paragraph()
+            p.text = str(eq)
+            
+    except Exception as e:
+        logger.error(f"Failed to insert equation text box into PPTX: {e}")
