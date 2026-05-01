@@ -1,1 +1,1 @@
-[ai4ac.vercel.com](https://ai4ac.vercel.app)
+[ai4ac.vercel.app](https://ai4ac.vercel.app)
