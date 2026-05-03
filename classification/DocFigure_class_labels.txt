@@ -1,0 +1,47 @@
+graphs - showing the relationship between input and output(x and y dimension) on the 2D cartesian plane
+	Line graph
+	Bar plot
+	Scatter plot
+	Histogram
+	Box plot
+	Bubble chart
+	Area chart
+	Pareto chart
+
+tables - showing the relationship of different variables on a table
+	Table
+	Confusion matrix
+
+diagram - showing aspects of the image where we have labels or places we want to emphasize
+	Block diagram
+	Venn diagram
+	Pie chart
+	Tree diagram
+
+meta figure - labeled image with the focus on the meta information
+	Flow chart
+	Sketch
+	Heat map
+	Mask
+	Vector plot
+	Surface plot
+	Contour plot
+
+photograph - showing a photo with no other intent
+	Natural image
+	3D object
+	Medical image
+	Geographic map
+
+screenshot - snippet of information
+	Algorithm
+
+equation - math equation
+
+text - images of text
+
+circular graphs - graphs but circular
+	Polar plot
+	Radar chart
+
+This problem is really about how much information is conveyed in the image itself vs how much context is necessary along with what format the image is in

@@ -1,0 +1,35 @@
+# Ignore downloaded classification datasets and annotations
+classification/dataset/images/
+classification/dataset/annotation/
+
+# Ignore downloaded alt-text datasets
+alttext/dataset/images/
+alttext/dataset/*.JSONL
+
+# Ignore generated outputs and older test directories
+want_generation/
+paligemma-alt-text-lora/
+
+# Ignore Python cache and virtual environments (Standard)
+__pycache__/
+*.pyc
+.env
+venv/
+
+# Ignore model weights/checkpoints 
+*.pt
+*.pth
+*.h5
+*.safetensors
+
+# Ignore all model checkpoints and adapters globally
+**/paligemma-alttext-lora/
+**/*paligemma*/
+**/checkpoint-*/
+
+# Ignore all binary and weight files globally
+*.bin
+*.safetensors
+*.pt
+*.pth
+*.h5
