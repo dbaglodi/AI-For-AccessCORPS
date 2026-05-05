@@ -648,10 +648,8 @@ def run_agent_pipeline(file_path, ext, progress_callback=None, provider="local",
                         image_bytes = create_group_composite(group_images)
 
                     if image_bytes is None:
-                        # FALLBACK: Port your Colab's screenshot-and-crop logic here!
-                        logger.warning(f"Shape {i} (Type {shape.shape_type}) requires slide cropping. Ensure screenshot function is implemented.")
+                        logger.warning(f"Shape {i} (Type {shape.shape_type}) could not be natively extracted (likely a linked image, placeholder, or complex group). Flagging for manual review.")
                         
-                        # FIX: Insert a placeholder result so the indexing stays aligned for the rest of the file
                         results.append({
                             "classification": ["Needs Review"], 
                             "alt_text": alt, 
