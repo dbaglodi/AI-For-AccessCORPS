@@ -186,18 +186,14 @@ def get_primary_model(provider="local", logger_instance=None):
     global _primary_model_cache
     log = logger_instance or logger
 
-    # 1. LAZY LOADING INTERCEPT: If Gemini, return None immediately without locking or loading!
     if provider == "gemini":
         log.info("Gemini provider selected. Bypassing local model load.")
         return None 
 
-    # 2. Local Model Loading (with existing thread lock)
     with _primary_model_lock:
-        # If it was already loaded by a previous request, return it instantly
         if _primary_model_cache: 
             return _primary_model_cache
             
-        # Otherwise, this is the Cold Start
         log.info("First request for local model detected. Downloading/Loading weights into VRAM now...")
         gpu_settings = get_gpu_settings()
         primary_model_id = "google/paligemma-3b-mix-448"
@@ -211,9 +207,20 @@ def get_primary_model(provider="local", logger_instance=None):
                 cache_dir=CUSTOM_CACHE_DIR
             ).to(gpu_settings["device"])
             
+            # --- [PLACEHOLDER START: Load Custom Models] ---
+            # TODO: Load ResNet Classification Model
+            # resnet_model = ... (load your ResNet model here)
+            
+            # TODO: Load Fine-Tuned PaliGemma Model
+            # finetuned_paligemma_path = "path/to/finetuned/model"
+            # finetuned_model = PaliGemmaForConditionalGeneration.from_pretrained(finetuned_paligemma_path, ...).to(gpu_settings["device"])
+            # --- [PLACEHOLDER END] ---
+
             _primary_model_cache = {
                 "model": model, 
                 "processor": processor,
+                # "resnet_model": resnet_model,             # uncomment when ready
+                # "finetuned_model": finetuned_model,       # uncomment when ready
                 "text_rag": LangChainRAG() if LANGCHAIN_AVAILABLE else SimpleTextRAG(),
                 "type": "vision_model_paligemma"
             }
@@ -337,36 +344,58 @@ def classify_and_generate_alt_text(
 
     # --- EXISTING LOCAL MODEL BRANCH (USED IF LOCAL SELECTED OR IF GEMINI FAILED) ---
     if not gemini_success:
-        # PREVENT MEMORY CRASH: Do NOT load the massive local model if Gemini fails due to rate limits.
         if provider == "gemini":
             logger.error("Gemini failed (likely rate limit). Returning error text to prevent server crash.")
             return ["Needs Review"], "API Error: Gemini rate limit reached (15 RPM). Please wait 1 minute and click Regenerate.", ""
 
         if primary_model_system and primary_model_system.get("model"):
             try:
-                model, processor = primary_model_system["model"], primary_model_system["processor"]
+                model = primary_model_system["model"]
+                processor = primary_model_system["processor"]
+                # resnet_model = primary_model_system.get("resnet_model")       # uncomment when ready
+                # finetuned_model = primary_model_system.get("finetuned_model") # uncomment when ready
+                
                 device = get_gpu_settings()["device"]
                 image = Image.open(io.BytesIO(prompt_image_bytes))
 
                 # Pass 1: Tagging
+                # --- [PLACEHOLDER START: Use ResNet for Classification] ---
+                # TODO: Run inference using ResNet model instead of PaliGemma
+                # resnet_prediction = resnet_model.predict(image)
+                # categories = map_resnet_output_to_categories(resnet_prediction)
+                
+                # Temporary fallback using base PaliGemma until ResNet is hooked up:
                 p1 = create_tagging_prompt(structured_context, "paligemma")
                 inputs = processor(text=p1, images=image, return_tensors="pt").to(device)
                 with torch.inference_mode():
                     out = model.generate(**inputs, max_new_tokens=50)
                     gen_tags = processor.decode(out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True).strip()
-                
                 categories = [valid_map[t.strip().lower()] for t in gen_tags.split(',') if t.strip().lower() in valid_map] or ["Other"]
+                # --- [PLACEHOLDER END] ---
                 
                 # Pass 2: Branching for Alt Text
                 is_complex = any(c in complex_types for c in categories)
-                p2 = create_complex_data_alt_text_prompt(structured_context, categories, existing_alt, "paligemma") if is_complex else create_alt_text_prompt(structured_context, categories, existing_alt, "paligemma")
                 
-                inputs2 = processor(text=p2, images=image, return_tensors="pt").to(device)
-                with torch.inference_mode():
-                    out2 = model.generate(**inputs2, max_new_tokens=250)
-                    alt_text = processor.decode(out2[0][inputs2["input_ids"].shape[1]:], skip_special_tokens=True).strip()
+                if is_complex:
+                    # USE BASE MODEL: For complex diagrams, maps, and graphs
+                    p2 = create_complex_data_alt_text_prompt(structured_context, categories, existing_alt, "paligemma")
+                    inputs2 = processor(text=p2, images=image, return_tensors="pt").to(device)
+                    with torch.inference_mode():
+                        out2 = model.generate(**inputs2, max_new_tokens=250)
+                        alt_text = processor.decode(out2[0][inputs2["input_ids"].shape[1]:], skip_special_tokens=True).strip()
+                else:
+                    # USE FINE-TUNED MODEL: For general images
+                    p2 = create_alt_text_prompt(structured_context, categories, existing_alt, "paligemma")
+                    inputs2 = processor(text=p2, images=image, return_tensors="pt").to(device)
+                    with torch.inference_mode():
+                        # --- [PLACEHOLDER START: Call Fine-Tuned Model] ---
+                        # TODO: Swap 'model' with 'finetuned_model' below once loaded
+                        out2 = model.generate(**inputs2, max_new_tokens=250) 
+                        # out2 = finetuned_model.generate(**inputs2, max_new_tokens=250)
+                        # --- [PLACEHOLDER END] ---
+                        alt_text = processor.decode(out2[0][inputs2["input_ids"].shape[1]:], skip_special_tokens=True).strip()
 
-                # Pass 3: MathML conversion if it's an Equation
+                # Pass 3: MathML conversion if it's an Equation (Uses base model)
                 if "Equation" in categories:
                     p3 = create_mathml_prompt("paligemma")
                     inputs3 = processor(text=p3, images=image, return_tensors="pt").to(device)
