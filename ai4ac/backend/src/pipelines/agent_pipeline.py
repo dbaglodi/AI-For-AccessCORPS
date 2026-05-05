@@ -685,16 +685,16 @@ def run_agent_pipeline(file_path, ext, progress_callback=None, provider="local",
                     if "Table" in cats: # <-- Relaxed condition
                         logger.info(f"Image {i} classification includes Table. Extracting data...")
                         # Pass provider and api_key here
-                        table_data = extract_table_from_image(shape.image.blob, provider=provider, api_key=api_key)
+                        table_data = extract_table_from_image(image_bytes, provider=provider, api_key=api_key)
                         if table_data:
                             insert_table_into_pptx(pres.slides[slide_num-1], shape, table_data, alt_text=gen_alt)
                             pres_modified = True
 
                     import base64
                     try:
-                        disp_bytes = preprocess_image(shape.image.blob, 256)
+                        disp_bytes = preprocess_image(image_bytes, 256)
                     except:
-                        disp_bytes = shape.image.blob # Best effort
+                        disp_bytes = image_bytes # Best effort
                     
                     img_data = base64.b64encode(disp_bytes).decode()
                     results.append({"classification": cats, "alt_text": alt, "generated_alt_text": gen_alt, "image_idx": i, "slide_num": slide_num, "slide_title": slide_title, "is_generated_title": is_generated_title, "image_data": f"data:image/jpeg;base64,{img_data}"})
