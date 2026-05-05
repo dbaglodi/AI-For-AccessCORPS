@@ -181,6 +181,63 @@ def preprocess_image(image_bytes: bytes, max_size: int = 512) -> bytes:
             logger.error(f"Error preparing image for prompt: {e}")
         raise e
 
+def extract_images_from_shape(shape) -> list:
+    """Recursively extracts raw image bytes from a shape or group."""
+    images = []
+    shape_type = getattr(shape, "shape_type", None)
+    
+    if shape_type in [MSO_SHAPE_TYPE.PICTURE, MSO_SHAPE_TYPE.LINKED_PICTURE]:
+        try:
+            if hasattr(shape, "image"):
+                images.append(shape.image.blob)
+        except AttributeError:
+            pass
+            
+    elif shape_type == MSO_SHAPE_TYPE.GROUP:
+        # A group acts like a mini-slide, iterate through its children
+        for child in shape.shapes:
+            images.extend(extract_images_from_shape(child))
+            
+    return images
+
+def create_group_composite(image_bytes_list, max_height=400) -> bytes:
+    """Stitches multiple images horizontally so the VLM can analyze them together."""
+    if not image_bytes_list:
+        return None
+    if len(image_bytes_list) == 1:
+        return image_bytes_list[0]
+        
+    pil_images = []
+    for b in image_bytes_list:
+        try:
+            # Load and scale down individual images to save memory
+            img = Image.open(io.BytesIO(b)).convert('RGB')
+            img.thumbnail((max_height, max_height), Image.Resampling.LANCZOS)
+            pil_images.append(img)
+        except Exception:
+            pass
+            
+    if not pil_images:
+        return None
+        
+    # Calculate dimensions for the composite canvas with a 10px gap between images
+    total_width = sum(img.width for img in pil_images) + (10 * (len(pil_images) - 1))
+    max_h = max(img.height for img in pil_images)
+    
+    # Create a white background canvas
+    composite = Image.new('RGB', (total_width, max_h), color='white')
+    
+    # Paste images side-by-side
+    x_offset = 0
+    for img in pil_images:
+        composite.paste(img, (x_offset, (max_h - img.height) // 2)) # Center vertically
+        x_offset += img.width + 10
+        
+    # Export the combined image back to bytes
+    out_bytes = io.BytesIO()
+    composite.save(out_bytes, format='PNG')
+    return out_bytes.getvalue()
+
 # --- Model Loading ---
 def get_primary_model(provider="local", logger_instance=None):
     global _primary_model_cache
@@ -578,10 +635,17 @@ def run_agent_pipeline(file_path, ext, progress_callback=None, provider="local",
                     
                     # 3. Safely extract image bytes (Handle Charts/Groups)
                     image_bytes = None
-                    if getattr(shape, "shape_type", None) in [MSO_SHAPE_TYPE.PICTURE, MSO_SHAPE_TYPE.LINKED_PICTURE]:
+                    shape_type = getattr(shape, "shape_type", None)
+                    
+                    if shape_type in [MSO_SHAPE_TYPE.PICTURE, MSO_SHAPE_TYPE.LINKED_PICTURE]:
                         try:
                             if hasattr(shape, "image"): image_bytes = shape.image.blob
                         except AttributeError: pass
+                        
+                    elif shape_type == MSO_SHAPE_TYPE.GROUP:
+                        # Dive into the group and stitch all found images together
+                        group_images = extract_images_from_shape(shape)
+                        image_bytes = create_group_composite(group_images)
 
                     if image_bytes is None:
                         # FALLBACK: Port your Colab's screenshot-and-crop logic here!
