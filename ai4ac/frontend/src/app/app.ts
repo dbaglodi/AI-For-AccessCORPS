@@ -1,4 +1,4 @@
-import { Component, OnDestroy, ElementRef, ViewChild, AfterViewInit, ChangeDetectorRef, HostListener } from '@angular/core'; // Import ElementRef, ViewChild, AfterViewInit, ChangeDetectorRef
+import { Component, OnInit, OnDestroy, ElementRef, ViewChild, AfterViewInit, ChangeDetectorRef, HostListener } from '@angular/core'; // Import ElementRef, ViewChild, AfterViewInit, ChangeDetectorRef
 import { HttpClient, HttpEventType, HttpResponse, HttpErrorResponse } from '@angular/common/http';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -14,8 +14,9 @@ import { switchMap, takeWhile } from 'rxjs/operators';
   styleUrls: ['./app.scss']
 })
 // --- START MODIFICATION: Add AfterViewInit ---
-export class AppComponent implements OnDestroy, AfterViewInit {
+export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
   private readonly apiUrl = 'https://ai-for-accesscorps.onrender.com';
+  isVercelMode: boolean = false;
   selectedFile: File | null = null;
   modelProvider: string = 'local';
   geminiApiKey: string = '';
@@ -55,6 +56,19 @@ export class AppComponent implements OnDestroy, AfterViewInit {
   // --- START MODIFICATION: Inject ChangeDetectorRef ---
   constructor(private http: HttpClient, private cdr: ChangeDetectorRef) { }
   // --- END MODIFICATION ---
+
+  ngOnInit() {
+    // Check if we are running in a browser (avoids errors if using Angular SSR)
+    if (typeof window !== 'undefined') {
+      // Check if hosted on Vercel
+      this.isVercelMode = window.location.hostname === 'ai4ac.vercel.app';
+
+      // Force Gemini if on Vercel
+      if (this.isVercelMode) {
+        this.modelProvider = 'gemini';
+      }
+    }
+  }
 
   @HostListener('document:keydown.escape')
   handleEscapeKey() {

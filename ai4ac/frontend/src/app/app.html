@@ -3,15 +3,20 @@
 
   <!-- Upload Section -->
   <div class="upload-section" style="flex-direction: column; align-items: flex-start; gap: 10px;">
-    <div class="model-selection" style="display: flex; gap: 10px; width: 100%;">
-      <select [(ngModel)]="modelProvider"
+    <div class="model-selection" style="display: flex; gap: 10px; width: 100%; align-items: center;">
+      
+      <select *ngIf="!isVercelMode" [(ngModel)]="modelProvider"
         style="padding: 0.5rem; border: 1px solid var(--border-color); border-radius: 4px;">
         <option value="local">PaliGemma</option>
         <option value="gemini">Gemini</option>
       </select>
+
+      <div *ngIf="isVercelMode" style="padding: 0.5rem; background: var(--background-light); border: 1px solid var(--border-color); border-radius: 4px; font-weight: 500; color: var(--secondary-color); white-space: nowrap;" title="Local GPU models are disabled on the free tier preview.">
+        Gemini API (Cloud Mode)
+      </div>
   
       <input type="password" *ngIf="modelProvider === 'gemini'" [(ngModel)]="geminiApiKey"
-        placeholder="Enter Gemini API Key"
+        placeholder="Enter Gemini API Key (Required)"
         style="padding: 0.5rem; border: 1px solid var(--border-color); border-radius: 4px; flex-grow: 1;" />
     </div>
   
