@@ -13,7 +13,7 @@ import { switchMap, takeWhile } from 'rxjs/operators';
   templateUrl: './app.html',
   styleUrls: ['./app.scss']
 })
-// --- START MODIFICATION: Add AfterViewInit ---
+
 export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
   private readonly apiUrl = 'https://ai-for-accesscorps.onrender.com';
   isVercelMode: boolean = false;
@@ -38,10 +38,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
   startSlide: number | null = null;
   endSlide: number | null = null;
 
-  // --- START MODIFICATION: Add ViewChild for carousel scrolling ---
   @ViewChild('cardsViewport') cardsViewportRef!: ElementRef<HTMLDivElement>;
   @ViewChild('cardsContainer') cardsContainerRef!: ElementRef<HTMLDivElement>;
-  // --- END MODIFICATION ---
 
   availableTags: string[] = [
     'Equation',
@@ -53,9 +51,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
     'Needs Review'
   ];
 
-  // --- START MODIFICATION: Inject ChangeDetectorRef ---
   constructor(private http: HttpClient, private cdr: ChangeDetectorRef) { }
-  // --- END MODIFICATION ---
 
   ngOnInit() {
     // Check if we are running in a browser (avoids errors if using Angular SSR)
@@ -132,9 +128,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
   }
 
   resetState() {
-    // --- START MODIFICATION: Remove uploadProgress ---
-    // this.uploadProgress = 0; // Removed
-    // --- END MODIFICATION ---
     this.fileId = null;
     this.images = [];
     this.activeIndex = 0;
@@ -295,9 +288,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
         console.log('Fetch images response:', res);
 
         if (res.status === 'completed') {
-          // --- START MODIFICATION: Use helper for mapping ---
           const newImages = (res.images || []).map((img: any, idx: number) => this.mapImageData(img, idx));
-          // --- END MODIFICATION ---
           this.images = this.sortImages(newImages); // Sort final list
 
           this.activeIndex = this.images.length > 0 ? 0 : 0;
@@ -401,7 +392,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
     });
   }
 
-  // --- START MODIFICATION: Updated setActive and scrolling ---
   setActive(i: number) {
     if (this.images.length === 0) return;
     const newIndex = (i + this.images.length) % this.images.length;
@@ -434,9 +424,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
       }
     }, 50);
   }
-  // --- END MODIFICATION ---
 
-  // --- START MODIFICATION: Update prev/next for wrapping ---
   prev() {
     this.setActive(this.activeIndex - 1); // setActive handles wrapping
   }
@@ -444,7 +432,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewInit {
   next() {
     this.setActive(this.activeIndex + 1); // setActive handles wrapping
   }
-  // --- END MODIFICATION ---
 
   regeneratePipeline(img: any) {
     if (!img) return;

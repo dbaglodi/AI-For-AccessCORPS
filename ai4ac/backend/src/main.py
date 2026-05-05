@@ -21,16 +21,12 @@ from pptx.enum.shapes import MSO_SHAPE_TYPE
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-# --- START MODIFICATION: Import config paths ---
 from src.config.app_config import UPLOAD_DIR, PROCESSED_DIR, REMEDIATED_DIR, CUSTOM_CACHE_DIR
-# --- END MODIFICATION ---
 
-# --- START MODIFICATION: Import pptx/docx classes ---
 from docx import Document
 from pptx import Presentation
 from docx.oxml.ns import qn
 from pptx.shapes.picture import Picture as PptxPicture
-# --- END MODIFICATION ---
 
 app = FastAPI()
 
@@ -65,7 +61,6 @@ def startup_event():
 
 load_dotenv()
 
-# --- START MODIFICATION: Expose Content-Disposition Header ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], # In production, restrict this to your frontend's origin
@@ -74,7 +69,6 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["Content-Disposition"] # Allow frontend to read this header
 )
-# --- END MODIFICATION ---
 
 processing_status = {}
 
@@ -384,7 +378,6 @@ async def regenerate_image(file_id: str, req: RegenerateRequest):
                 doc_modified = True
 
         if req.forced_pipeline == "Equation" and image_bytes:
-            # --- START MODIFICATION ---
             from src.pipelines.equation_pipeline import extract_equations_from_image, insert_equation_into_docx, insert_equation_into_pptx
             equations = extract_equations_from_image(image_bytes, provider=req.provider, api_key=req.api_key)
             if equations:
@@ -394,7 +387,6 @@ async def regenerate_image(file_id: str, req: RegenerateRequest):
                 elif ext == ".pptx":
                     insert_equation_into_pptx(slide_target, target_shape, equations)
                     doc_modified = True
-            # --- END MODIFICATION ---
             else:
                 raise HTTPException(
                     status_code=422, 
@@ -588,12 +580,10 @@ def download_file(file_id: str):
 
 if __name__ == "__main__":
     import uvicorn
-    # --- START MODIFICATION: Ensure necessary directories exist before starting ---
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
     REMEDIATED_DIR.mkdir(parents=True, exist_ok=True)
     CUSTOM_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    # --- END MODIFICATION ---
 
     logging.basicConfig(level=logging.INFO)
     logging.info(f"Starting server... Uploads: {UPLOAD_DIR}, Processed: {PROCESSED_DIR}, Remediated: {REMEDIATED_DIR}, Cache: {CUSTOM_CACHE_DIR}")

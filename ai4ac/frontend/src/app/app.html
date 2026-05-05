@@ -34,7 +34,6 @@
   <div *ngIf="error" class="error-message">{{ error }}</div>
 
   <!-- Progress Section -->
-  <!-- --- START MODIFICATION: Simplified progress display --- -->
   <div class="status-container" *ngIf="processing">
     <!-- Processing Progress -->
     <div class="status-step active" *ngIf="processingStatus">
@@ -53,13 +52,11 @@
       </div>
     </div>
   </div>
-  <!-- --- END MODIFICATION --- -->
 
 
   <!-- Results Section -->
   <div *ngIf="images.length" class="results-container">
     <h2>Review Images & Alt Text</h2>
-    <!-- --- START MODIFICATION: Removed slider, kept prev/next buttons --- -->
     <div class="carousel-controls">
       <button type="button" class="secondary nav-arrow-button" (click)="prev()"
         [disabled]="images.length <= 1">◀</button>
@@ -67,12 +64,9 @@
       <button type="button" class="secondary nav-arrow-button" (click)="next()"
         [disabled]="images.length <= 1">▶</button>
     </div>
-    <!-- --- END MODIFICATION --- -->
 
-    <!-- --- START MODIFICATION: Added #refs for scrolling --- -->
     <div class="cards-viewport" #cardsViewport>
       <div class="cards" role="list" #cardsContainer>
-        <!-- --- END MODIFICATION --- -->
         <div *ngFor="let img of images; let i = index" role="listitem" class="card-wrapper"
           [class.active]="i === activeIndex" id="image-card-{{i}}">
           <!-- Card content remains the same -->
@@ -146,14 +140,12 @@
       </div>
     </div>
 
-    <!-- --- START MODIFICATION: Added Image Navigation Buttons --- -->
     <div class="image-nav-buttons" *ngIf="images.length > 1">
       <button *ngFor="let img of images; let i = index" type="button" class="nav-button"
         [class.active]="i === activeIndex" (click)="setActive(i)" [attr.aria-label]="'Go to image ' + (i + 1)">
         {{ i + 1 }}
       </button>
     </div>
-    <!-- --- END MODIFICATION --- -->
 
 
     <form (ngSubmit)="updateAltText()">
@@ -318,10 +310,8 @@
   }
 
   .progress-bar {
-    /* --- START MODIFICATION: Make progress bar flexible --- */
     flex-grow: 1;
     /* Allow bar to take remaining space */
-    /* --- END MODIFICATION --- */
     margin: 0;
     /* Adjusted margin */
     background: var(--border-color);
@@ -356,7 +346,6 @@
     margin-top: 2rem;
   }
 
-  /* --- START MODIFICATION: Updated Carousel Controls --- */
   .carousel-controls {
     display: flex;
     justify-content: space-between;
@@ -379,16 +368,11 @@
     line-height: 1;
   }
 
-  /* --- END MODIFICATION --- */
 
 
-  /* --- START MODIFICATION: Carousel and Card Styles --- */
   .cards-viewport {
     overflow-x: auto;
-    /* --- START MODIFICATION: Fix vertical scrolling issue --- */
     overflow-y: visible;
-    /* Was 'hidden', this was clipping the cards */
-    /* --- END MODIFICATION --- */
     white-space: nowrap;
     /* Keep cards in a row */
     padding: 1rem 0;
@@ -429,7 +413,6 @@
     box-sizing: border-box;
   }
 
-  /* --- END MODIFICATION --- */
 
   .image-card {
     border: 1px solid var(--border-color);
@@ -443,10 +426,8 @@
     /* Ensure cards have consistent height for alignment */
     display: flex;
     flex-direction: column;
-    /* --- START MODIFICATION: Add max-height and overflow-y --- */
     max-height: 75vh;
     overflow-y: auto;
-    /* --- END MODIFICATION --- */
   }
 
   /* Keep active scaling subtle */
@@ -749,7 +730,6 @@
     padding: 0.3rem 0.6rem;
   }
 
-  /* --- START MODIFICATION: Styles for Image Navigation Buttons --- */
   .image-nav-buttons {
     display: flex;
     flex-wrap: wrap;
@@ -790,7 +770,6 @@
     font-weight: bold;
   }
 
-  /* --- END MODIFICATION --- */
 
 
   .action-buttons {
