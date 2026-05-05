@@ -555,18 +555,34 @@ def download_file(file_id: str):
                         txBox.text = new_title
                         txBox.name = "Hidden Generated Slide Title"
 
-            # --- EXISTING: Apply alt text to shapes ---
-            shapes_processed = 0
-            for slide in pres.slides:
-                for shape in slide.shapes:
-                    if getattr(shape, "shape_type", None) in valid_types:
-                         if shapes_processed < len(results):
-                            final_alt_text = results[shapes_processed].get("final_alt_text", results[shapes_processed].get("generated_alt_text", ""))
-                            try:
-                                cNvPr_elements = shape._element.xpath('.//*[local-name()="cNvPr"]')
-                                if cNvPr_elements: cNvPr_elements[0].set('descr', final_alt_text)
-                            except Exception: pass
-                            shapes_processed += 1
+            # Group results by slide_num so they apply to the correct slides even if a range was used
+            results_by_slide = {}
+            for res in results:
+                s_num = res.get("slide_num")
+                if s_num:
+                    if s_num not in results_by_slide:
+                        results_by_slide[s_num] = []
+                    results_by_slide[s_num].append(res)
+
+            for slide_idx, slide in enumerate(pres.slides, 1):
+                if slide_idx in results_by_slide:
+                    slide_results = results_by_slide[slide_idx]
+                    shape_result_idx = 0
+                    
+                    for shape in slide.shapes:
+                        if getattr(shape, "shape_type", None) in valid_types:
+                            # Only apply if we have a result for this specific shape index on this slide
+                            if shape_result_idx < len(slide_results):
+                                res = slide_results[shape_result_idx]
+                                final_alt_text = res.get("final_alt_text", res.get("generated_alt_text", ""))
+                                try:
+                                    cNvPr_elements = shape._element.xpath('.//*[local-name()="cNvPr"]')
+                                    if cNvPr_elements: 
+                                        cNvPr_elements[0].set('descr', final_alt_text)
+                                except Exception: 
+                                    pass
+                                shape_result_idx += 1
+                                
             pres.save(out_path)
 
     except Exception as e:
