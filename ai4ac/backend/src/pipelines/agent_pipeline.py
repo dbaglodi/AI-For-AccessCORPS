@@ -585,11 +585,25 @@ def run_agent_pipeline(file_path, ext, progress_callback=None, provider="local",
 
                     if image_bytes is None:
                         # FALLBACK: Port your Colab's screenshot-and-crop logic here!
-                        # Because this is the backend, if you haven't brought over the 
-                        # pdf2image / libreoffice slide screenshot function yet, 
-                        # we must log a warning and skip to avoid crashing the server.
                         logger.warning(f"Shape {i} (Type {shape.shape_type}) requires slide cropping. Ensure screenshot function is implemented.")
-                        continue # Remove this continue once your slide screenshot function is ported
+                        
+                        # FIX: Insert a placeholder result so the indexing stays aligned for the rest of the file
+                        results.append({
+                            "classification": ["Needs Review"], 
+                            "alt_text": alt, 
+                            "generated_alt_text": "Needs Review: Image extraction failed (requires manual slide cropping).", 
+                            "image_idx": i, 
+                            "slide_num": slide_num, 
+                            "slide_title": slide_title, 
+                            "is_generated_title": is_generated_title, 
+                            "image_data": UNSUPPORTED_IMAGE_PLACEHOLDER
+                        })
+                        
+                        # Make sure to update the progress bar even if we skipped generating AI text
+                        if progress_callback: 
+                            progress_callback(f"Image {i}/{total_count}", i, total_count)
+                            
+                        continue
 
                     # --- BACKGROUND RAG QUERY (PPTX) ---
                     if text_rag and ctx.get("surrounding_text"):
