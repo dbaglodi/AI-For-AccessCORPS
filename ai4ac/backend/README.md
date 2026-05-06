@@ -35,6 +35,27 @@ The codebase is currently configured with placeholders to seamlessly integrate y
 3. **Activate ResNet Classification:** Inside `classify_and_generate_alt_text()`, locate the `[PLACEHOLDER START: Use ResNet for Classification]` block. Replace the temporary base PaliGemma prompt logic with your ResNet inference logic.
 4. **Activate Fine-Tuned PaliGemma:** In the same function, under the `USE FINE-TUNED MODEL` block, swap the standard `model.generate(...)` call with `finetuned_model.generate(...)`.
 
+## Enabling Full Slide Screenshots (Advanced)
+
+By default, the backend ignores un-extractable complex shapes (like SmartArt, certain Grouped Vectors, and empty placeholders) and flags them for "Manual Review". 
+
+This is because extracting these elements requires rendering the entire PowerPoint slide into a PDF and cropping it using `libreoffice`. This process requires over 1.5GB of RAM, which will instantly cause Out-Of-Memory (OOM) crashes on 512MB free-tier hosting (like Render).
+
+Once migrated to a cloud instance with **2GB+ of RAM and `sudo` access**, you can unlock this feature to drastically reduce the number of skipped images.
+
+### Steps to Activate:
+
+1. **Install OS Dependencies:** Run these commands on your Linux server:
+   sudo apt-get update
+   sudo apt-get install libreoffice poppler-utils
+
+2. **Install Python Package:** Run this in your environment:
+   pip install pdf2image
+
+3. **Uncomment Code:** Open `src/pipelines/agent_pipeline.py`. Search for `[PLACEHOLDER START: Full Slide Screenshot Fallback]` and uncomment the Python functions.
+
+4. **Uncomment Cropping Logic:** In the same file, search for `[PLACEHOLDER START: Slide Cropping Logic]` (inside the PPTX processing loop) and uncomment that block to activate the fallback logic.
+
 ## System Requirements (For Local/GPU Hosting)
 
 * **GPU:** NVIDIA GPU with CUDA support (8GB VRAM minimum, 16GB+ recommended).  

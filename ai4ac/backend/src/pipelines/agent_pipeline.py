@@ -238,6 +238,43 @@ def create_group_composite(image_bytes_list, max_height=400) -> bytes:
     composite.save(out_bytes, format='PNG')
     return out_bytes.getvalue()
 
+# --- [PLACEHOLDER START: Full Slide Screenshot Fallback] ---
+# NOTE: This requires LibreOffice, poppler-utils, and pdf2image.
+# It is disabled by default because running headless LibreOffice to render XML
+# crashes 512MB RAM Free-Tier servers. 
+# Uncomment when deployed on a host with 2GB+ RAM and sudo access.
+'''
+import subprocess
+import tempfile
+import io
+import os
+from pdf2image import convert_from_path
+
+pptx_to_images_cache = {}
+
+def convert_pptx_to_images(pptx_file_path):
+    global pptx_to_images_cache
+    if pptx_file_path in pptx_to_images_cache:
+        return pptx_to_images_cache[pptx_file_path]
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        subprocess.run(["libreoffice", "--headless", "--convert-to", "pdf", "--outdir", temp_dir, pptx_file_path], check=True)
+        pdf_files = [f for f in os.listdir(temp_dir) if f.endswith(".pdf")]
+        if not pdf_files: raise RuntimeError("Failed to convert PowerPoint to PDF.")
+        images = convert_from_path(os.path.join(temp_dir, pdf_files[0]))
+        pptx_to_images_cache[pptx_file_path] = images
+        return images
+
+def take_slide_screenshot(pptx_file_path, slide_number):
+    slide_images = convert_pptx_to_images(pptx_file_path)
+    if slide_number > len(slide_images): raise ValueError("Slide not found.")
+    img_bytes = io.BytesIO()
+    slide_images[slide_number - 1].save(img_bytes, format="PNG")
+    img_bytes.seek(0)
+    return img_bytes.read()
+'''
+# --- [PLACEHOLDER END] ---
+
 # --- Model Loading ---
 def get_primary_model(provider="local", logger_instance=None):
     global _primary_model_cache
@@ -646,6 +683,27 @@ def run_agent_pipeline(file_path, ext, progress_callback=None, provider="local",
                         # Dive into the group and stitch all found images together
                         group_images = extract_images_from_shape(shape)
                         image_bytes = create_group_composite(group_images)
+                    
+                    # --- [PLACEHOLDER START: Slide Cropping Logic] ---
+                    # Uncomment this block if you enabled the screenshot functions above.
+                    '''
+                    if image_bytes is None:
+                        try:
+                            slide_screenshot_bytes = take_slide_screenshot(file_path, slide_num)
+                            slide_img = Image.open(io.BytesIO(slide_screenshot_bytes))
+                            scale_x = slide_img.width / pres.slide_width
+                            scale_y = slide_img.height / pres.slide_height
+                            left, top = shape.left * scale_x, shape.top * scale_y
+                            right, bottom = (shape.left + shape.width) * scale_x, (shape.top + shape.height) * scale_y
+                            shape_img = slide_img.crop((left, top, right, bottom))
+                            img_byte_arr = io.BytesIO()
+                            shape_img.save(img_byte_arr, format='PNG')
+                            image_bytes = img_byte_arr.getvalue()
+                        except Exception as e:
+                            logger.error(f"Failed to crop shape {i} on slide {slide_num}: {e}")
+                            image_bytes = None
+                    '''
+                    # --- [PLACEHOLDER END] ---
 
                     if image_bytes is None:
                         logger.warning(f"Shape {i} (Type {shape.shape_type}) could not be natively extracted (likely a linked image, placeholder, or complex group). Flagging for manual review.")
